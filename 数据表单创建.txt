@@ -1,0 +1,104 @@
+-- 创建表：包含JSONB数据字段 + 不允许为空的查询字符串字段
+CREATE TABLE travel_plans (
+    id SERIAL PRIMARY KEY, -- 自增主键，唯一标识行程
+    plan_data JSONB NOT NULL, -- 存储行程完整JSON数据（非空）
+    query_keyword VARCHAR(255) NOT NULL, -- 用于查询的字符串字段（不允许为空）
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP -- 自动记录创建时间
+);
+
+-- 为travel_plans表添加允许为空的userid字段（类型根据实际用户ID格式选择）
+ALTER TABLE travel_plans 
+ADD COLUMN userid INT; -- 假设用户ID是整数（如1、2、3...），允许为空
+
+INSERT INTO travel_plans (plan_data, query_keyword)
+VALUES (
+    -- 完整JSON数据（转换为JSONB类型）
+    '{ 
+        "trip_title": "潮州三天旅游规划", 
+        "days": [ 
+            { 
+                "day": 1, 
+                "title": "古城文化体验", 
+                "attractions": [ 
+                    { "id": 1, "name": "牌坊街", "time": "09:00", "lnglat": [116.65079, 23.668646], "desc": "潮州古城地标，明清风格牌坊群街区，集中展示潮州历史文化" }, 
+                    { "id": 2, "name": "开元寺", "time": "11:30", "lnglat": [116.648963, 23.663056], "desc": "千年古刹，粤东第一古刹，保留唐代建筑风格和文物" }, 
+                    { "id": 3, "name": "广济桥", "time": "14:30", "lnglat": [116.652732, 23.662858], "desc": "湘子桥，世界上最早的启闭式桥梁，中国四大古桥之一" }, 
+                    { "id": 4, "name": "潮州古城墙", "time": "17:00", "lnglat": [116.647995, 23.665254], "desc": "明代古城墙遗址，可俯瞰古城全景和韩江风光" } 
+                ] 
+            }, 
+            { 
+                "day": 2, 
+                "title": "历史古迹探索", 
+                "attractions": [ 
+                    { "id": 5, "name": "韩文公祠", "time": "09:00", "lnglat": [116.657032, 23.670541], "desc": "纪念唐代文学家韩愈的祠堂，保留众多名人题刻" }, 
+                    { "id": 6, "name": "潮州西湖公园", "time": "11:30", "lnglat": [116.639245, 23.664109], "desc": "潮州历史名园，保留唐宋以来的人文景观和自然风貌" }, 
+                    { "id": 7, "name": "青龙古庙", "time": "14:30", "lnglat": [116.650128, 23.659846], "desc": "潮州最古老的神庙之一，祭祀安济圣王" }, 
+                    { "id": 8, "name": "广济桥灯光秀", "time": "19:30", "lnglat": [116.652732, 23.662858], "desc": "每晚定时上演的灯光表演，展现潮州历史文化故事" } 
+                ] 
+            }, 
+            { 
+                "day": 3, 
+                "title": "文化民俗体验", 
+                "attractions": [ 
+                    { "id": 9, "name": "潮州博物馆", "time": "09:00", "lnglat": [116.655438, 23.656121], "desc": "了解潮州历史文化的窗口，收藏丰富的文物和艺术品" }, 
+                    { "id": 10, "name": "下水门城楼", "time": "11:30", "lnglat": [116.653782, 23.661574], "desc": "古城重要城门之一，可登楼远眺" }, 
+                    { "id": 11, "name": "潮州人民广场", "time": "14:30", "lnglat": [116.649215, 23.649852], "desc": "潮州城市中心广场，展现现代潮州风貌" }, 
+                    { "id": 12, "name": "凤凰洲公园", "time": "16:30", "lnglat": [116.661858, 23.657682], "desc": "韩江中的江心岛，可欣赏韩江美景和城市风光" } 
+                ] 
+            } 
+        ], 
+        "trip_info": { 
+            "location": "广东省潮州市", 
+            "total_days": 3, 
+            "total_attractions": 12, 
+            "description": "潮州三日深度文化之旅，体验古城历史、宗教文化、古迹遗址和民俗风情" 
+        } 
+    }'::JSONB,  -- 显式转换为JSONB类型
+    'abc'  -- query_keyword字段值（非空）
+);
+
+-- 创建用户表
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    -- 电话（账号）：非空、唯一
+    phone VARCHAR(15) NOT NULL UNIQUE,
+    -- 密码：非空（存储加密后的值）
+    password VARCHAR(60) NOT NULL,
+    -- 名字：非空
+    name VARCHAR(50) NOT NULL,
+    -- 图片路径：可空
+    avatar_path VARCHAR(255),
+    -- 创建时间
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- 更新时间
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE html (
+    id SERIAL PRIMARY KEY, -- 自增主键，唯一标识每条代码记录
+    codeid VARCHAR(255) NOT NULL, -- 代码唯一标识符（如项目名、功能ID）
+    userid INT, -- 新增：关联用户表的用户ID（与users.id类型一致，INT）
+    html TEXT NOT NULL, -- 存储html代码（模板/脚本/样式）
+    code VARCHAR(500), -- 【仅修正此处】将关键字desc改为code_desc，避免语法报错
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, -- 创建时间
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP -- 更新时间
+);
+
+-- 创建名为ing的表
+CREATE TABLE ing (
+    -- 自增字段（主键）：使用PostgreSQL的IDENTITY实现自增，确保唯一性
+    id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    
+    -- 消息字段1：最多占用60字节（VARCHAR的长度参数在PostgreSQL中是字符数，此处按常见需求设为60字符，若需严格60字节需结合编码调整）
+    json VARCHAR(60),
+    
+    -- 消息字段2：同消息字段1
+    html VARCHAR(60),
+    
+    -- 消息字段3：同消息字段1
+    codeid VARCHAR(60),
+    
+    -- 用户ID字段：通常用整数类型存储用户标识（可根据实际需求改为BIGINT或VARCHAR）
+    user_id INT
+);
+

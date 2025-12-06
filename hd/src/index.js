@@ -1,0 +1,2867 @@
+// 导入所有依赖包
+require('dotenv').config();
+const express = require('express');
+const helmet = require('helmet');
+const cors = require('cors');
+const morgan = require('morgan');
+const fs = require('fs');
+const path = require('path');
+const { Pool } = require('pg');
+const { createLogger, format, transports } = require('winston');
+const rateLimit = require('express-rate-limit');
+const Joi = require('joi');
+const swaggerUi = require('swagger-ui-express');
+const crypto = require('crypto');
+const bcrypt = require('bcrypt');
+
+// ===== 日志系统配置 - 增强版 =====
+const redact = (obj) => {
+  const s = JSON.stringify(obj);
+  // 脱敏更多敏感信息
+  return s.replace(/(PG_PASSWORD|password|secret|token|auth|key)"\s*:\s*"[^"]+/gi, '$1":"***"')
+          .replace(/(user_id|userid)"\s*:\s*"?\d+"?/gi, '$1":"***"');
+};
+
+// 自定义日志格式，增加请求ID跟踪
+const logger = createLogger({
+  level: 'info',
+  format: format.combine(
+    format.timestamp(),
+    format.printf((info) => {
+      const base = { 
+        level: info.level, 
+        message: info.message, 
+        timestamp: info.timestamp,
+        request_id: info.request_id || 'N/A',
+        response_time: info.response_time || 'N/A'
+      };
+      const rest = Object.assign({}, info);
+      delete rest.level;
+      delete rest.message;
+      delete rest.timestamp;
+      delete rest.request_id;
+      delete rest.response_time;
+      return `${redact(Object.assign(base, rest))}`;
+    })
+  ),
+  transports: [
+    new transports.Console(),
+    new transports.File({ filename: path.join('logs', 'app.log') }),
+    // 单独的错误日志文件
+    new transports.File({ 
+      filename: path.join('logs', 'error.log'),
+      level: 'error'
+    }),
+    // 单独的性能日志文件
+    new transports.File({ 
+      filename: path.join('logs', 'performance.log'),
+      level: 'warn',
+      filter: (info) => info.message && (info.message.includes('Slow API') || info.message.includes('performance'))
+    })
+  ]
+});
+
+// ===== 数据库配置 - 增强版 =====
+const pool = new Pool({
+  host: process.env.PG_HOST,
+  port: Number(process.env.PG_PORT || 5432),
+  database: process.env.PG_DATABASE,
+  user: process.env.PG_USER,
+  password: process.env.PG_PASSWORD,
+  ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  max: 15, // 增加连接池大小以提高并发性能
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 3000 // 减少连接超时时间
+});
+
+// 数据库连接池监控
+pool.on('acquire', (client) => {
+  logger.debug('Client acquired from pool', { 
+    client_id: client.processID,
+    pool_status: { 
+      total: pool.totalCount, 
+      idle: pool.idleCount, 
+      waiting: pool.waitingCount 
+    } 
+  });
+});
+
+pool.on('release', (client) => {
+  logger.debug('Client released back to pool', { 
+    client_id: client?.processID,
+    pool_status: { 
+      total: pool.totalCount, 
+      idle: pool.idleCount, 
+      waiting: pool.waitingCount 
+    } 
+  });
+});
+
+pool.on('error', (err, client) => {
+  logger.error('Unexpected error on idle database client', { 
+    error: err.message,
+    client_id: client?.processID 
+  });
+});
+
+// 数据库初始化函数
+async function initDatabase() {
+  try {
+    await pool.query(
+      'CREATE TABLE IF NOT EXISTS travel_plans (id SERIAL PRIMARY KEY, plan_data JSONB NOT NULL, query_keyword VARCHAR(255) NOT NULL, userid INT, created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)'
+    );
+    
+    // 如果表已存在但没有userid字段，则添加该字段
+    const columnExists = await pool.query(
+      'SELECT column_name FROM information_schema.columns WHERE table_name = \'travel_plans\' AND column_name = \'userid\''
+    );
+    
+    if (columnExists.rows.length === 0) {
+      await pool.query('ALTER TABLE travel_plans ADD COLUMN userid INT');
+      logger.info('Added userid column to travel_plans table');
+    }
+    
+    // 创建html表
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS html (
+        id SERIAL PRIMARY KEY,
+        codeid VARCHAR(255) NOT NULL,
+        userid INT,
+        html TEXT NOT NULL,
+        code VARCHAR(500),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      
+      -- 创建索引以提高查询性能
+      CREATE INDEX IF NOT EXISTS idx_html_codeid ON html(codeid);
+      CREATE INDEX IF NOT EXISTS idx_html_userid ON html(userid);
+    `);
+    
+    logger.info('Database initialized successfully');
+  } catch (error) {
+    logger.error('Error initializing database:', error);
+    throw error;
+  }
+}
+
+// ===== 中间件定义 =====
+// 速率限制中间件
+const rateLimitMiddleware = rateLimit({
+  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 60000),
+  max: Number(process.env.RATE_LIMIT_MAX || 60),
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// 查询关键字验证中间件
+function requireKeyword(req, res, next) {
+  const q = req.query.query_keyword || req.body.query_keyword;
+  if (!q || typeof q !== 'string') {
+    return res.status(400).json({ error: 'query_keyword is required' });
+  }
+  // 存储query_keyword到请求对象中，供后续函数使用
+  req.queryKeyword = q;
+  next();
+}
+
+// 中间件：验证请求数据格式（用于新的加密存储接口）
+function validateJsonData(req, res, next) {
+  try {
+    // 确保请求体存在且是对象类型
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid request data: body must be a valid JSON object'
+      });
+    }
+
+    // 确保包含userid字段
+    if (!req.body.hasOwnProperty('userid')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: userid'
+      });
+    }
+
+    // 验证userid的有效性（根据业务需求，这里假设是数字类型）
+    if (typeof req.body.userid !== 'number' || req.body.userid <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid userid: must be a positive number'
+      });
+    }
+
+    // 继续处理请求
+    next();
+  } catch (error) {
+    logger.error('Error validating request data:', error);
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid JSON data format'
+    });
+  }
+}
+
+// 验证旅行计划请求的中间件，确保包含必要的userid和query_keyword字段
+function validateTravelPlanRequest(req, res, next) {
+  try {
+    // 创建验证模式
+    const travelPlanRequestSchema = Joi.object({
+      // userid可以是字符串或数字
+      userid: Joi.alternatives().try(
+        Joi.string().required(),
+        Joi.number().required()
+      ).required(),
+      // query_keyword必须是字符串且不为空
+      query_keyword: Joi.string().min(1).required()
+      // 不设置其他约束，允许包含任意额外字段
+    }).unknown(true); // 允许对象包含模式中未定义的键
+
+    // 验证请求体
+    const validationResult = travelPlanRequestSchema.validate(req.body);
+
+    // 如果验证失败，返回错误
+    if (validationResult.error) {
+      logger.warn('Travel plan request validation failed:', validationResult.error.details);
+      return res.status(400).json({
+        success: false,
+        error: validationResult.error.details.map(detail => detail.message).join(', ')
+      });
+    }
+
+    // 验证通过，继续处理请求
+    next();
+  } catch (error) {
+    logger.error('Error validating travel plan request:', error);
+    res.status(400).json({
+      success: false,
+      error: 'Failed to validate travel plan request'
+    });
+  }
+}
+
+// 请求频率限制中间件
+function rateLimiterMiddleware(req, res, next) {
+  try {
+    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const now = Date.now();
+    const key = `rate_limit:${ip}`;
+    
+    // 简单的内存限流实现（生产环境推荐使用Redis）
+    if (!global.rateLimitStore) {
+      global.rateLimitStore = {};
+    }
+    
+    // 初始化该IP的记录
+    if (!global.rateLimitStore[key]) {
+      global.rateLimitStore[key] = [];
+    }
+    
+    // 清理过期的请求记录（1分钟内的请求）
+    global.rateLimitStore[key] = global.rateLimitStore[key].filter(time => now - time < 60000);
+    
+    // 检查是否超过限制（每分钟最多10个请求）
+    if (global.rateLimitStore[key].length >= 10) {
+      logger.warn('Rate limit exceeded', { ip });
+      return res.status(429).json({
+        success: false,
+        error: 'Rate limit exceeded. Please try again later.'
+      });
+    }
+    
+    // 记录本次请求时间
+    global.rateLimitStore[key].push(now);
+    
+    // 设置响应头
+    res.setHeader('X-RateLimit-Limit', 10);
+    res.setHeader('X-RateLimit-Remaining', 10 - global.rateLimitStore[key].length);
+    res.setHeader('X-RateLimit-Reset', Math.floor((now + 60000) / 1000));
+    
+    next();
+  } catch (error) {
+    logger.error('Error in rate limiter middleware:', error);
+    // 出错时允许请求通过
+    next();
+  }
+}
+
+// 基本身份验证中间件
+function basicAuthMiddleware(req, res, next) {
+  try {
+    // 从环境变量获取预期的API密钥
+    const expectedApiKey = process.env.API_KEY || 'default_api_key';
+    
+    // 从请求头获取API密钥
+    const authHeader = req.headers['authorization'];
+    
+    // 如果没有提供认证信息，拒绝请求
+    if (!authHeader) {
+      logger.warn('Authorization header missing');
+      return res.status(401).json({
+        success: false,
+        error: 'Authorization required'
+      });
+    }
+    
+    // 检查Bearer Token格式
+    if (!authHeader.startsWith('Bearer ')) {
+      logger.warn('Invalid authorization header format');
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid authorization format. Expected Bearer token.'
+      });
+    }
+    
+    // 提取并验证API密钥
+    const apiKey = authHeader.split(' ')[1];
+    if (apiKey !== expectedApiKey) {
+      logger.warn('Invalid API key');
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid API key'
+      });
+    }
+    
+    // 验证通过
+    next();
+  } catch (error) {
+    logger.error('Error in basic auth middleware:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Authentication error'
+    });
+  }
+}
+
+// 中间件：验证表单数据提交
+function validateFormData(req, res, next) {
+  try {
+    // 确保请求体存在且是对象类型
+    if (!req.body || typeof req.body !== 'object') {
+      logger.warn('Invalid request: body is not a valid JSON object');
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid request data: body must be a valid JSON object'
+      });
+    }
+
+    // 验证必需字段
+    const requiredFields = ['userid', 'codeid', 'html'];
+    const missingFields = requiredFields.filter(field => !req.body.hasOwnProperty(field));
+    
+    if (missingFields.length > 0) {
+      logger.warn(`Missing required fields: ${missingFields.join(', ')}`);
+      return res.status(400).json({
+        success: false,
+        error: `Missing required fields: ${missingFields.join(', ')}`
+      });
+    }
+
+    // 验证字段值不为空
+    if (!req.body.userid || !req.body.codeid || !req.body.html) {
+      logger.warn('Required fields cannot be empty');
+      return res.status(400).json({
+        success: false,
+        error: 'userid, codeid, and html fields cannot be empty'
+      });
+    }
+
+    // 验证userid的类型
+    if (typeof req.body.userid !== 'number' && typeof req.body.userid !== 'string') {
+      logger.warn('Invalid userid type');
+      return res.status(400).json({
+        success: false,
+        error: 'userid must be a number or string'
+      });
+    }
+
+    // 验证codeid和html的类型
+    if (typeof req.body.codeid !== 'string' || typeof req.body.html !== 'string') {
+      logger.warn('Invalid codeid or html type');
+      return res.status(400).json({
+        success: false,
+        error: 'codeid and html must be strings'
+      });
+    }
+
+    // 转换userid为整数（如果是数字字符串）
+    if (typeof req.body.userid === 'string') {
+      const numUserid = parseInt(req.body.userid, 10);
+      if (!isNaN(numUserid)) {
+        req.body.userid = numUserid;
+      }
+    }
+
+    // 继续处理请求
+    next();
+  } catch (error) {
+    logger.error('Error validating form data:', error);
+    return res.status(400).json({
+      success: false,
+      error: 'Failed to validate form data'
+    });
+  }
+}
+
+// 简单的XSS过滤函数
+function sanitizeHtml(html) {
+  // 移除潜在的危险标签
+  let sanitized = html
+    .replace(/on\w+\s*=\s*["']?[^"'>]+/gi, '');
+  return sanitized;
+}
+
+// 中间件：验证用户注册数据
+function validateUserRegistration(req, res, next) {
+  try {
+    // 确保请求体存在且是对象类型
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid request data: body must be a valid JSON object'
+      });
+    }
+
+    // 检查必填字段
+    const requiredFields = ['phone', 'password', 'name'];
+    for (const field of requiredFields) {
+      if (!req.body.hasOwnProperty(field)) {
+        return res.status(400).json({
+          success: false,
+          error: `Missing required field: ${field}`
+        });
+      }
+    }
+
+    const { phone, password, name } = req.body;
+
+    // 验证手机号格式（简单的中国大陆手机号验证）
+    const phoneRegex = /^1[3-9]\d{9}$/;
+    if (typeof phone !== 'string' || !phoneRegex.test(phone)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid phone number format. Please provide a valid Chinese mobile phone number.'
+      });
+    }
+
+    // 验证密码长度
+    if (typeof password !== 'string' || password.length < 6 || password.length > 60) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password must be between 6 and 60 characters long'
+      });
+    }
+
+    // 验证名字格式
+    if (typeof name !== 'string' || name.length < 1 || name.length > 50) {
+      return res.status(400).json({
+        success: false,
+        error: 'Name must be between 1 and 50 characters long'
+      });
+    }
+
+    // 继续处理请求
+    next();
+  } catch (error) {
+    logger.error('Error validating user registration data:', error);
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid user registration data format'
+    });
+  }
+}
+
+// 行程数据验证中间件
+const attractionSchema = Joi.object({
+  id: Joi.number().required(),
+  name: Joi.string().required(),
+  time: Joi.string().required(),
+  lnglat: Joi.array().items(Joi.number()).length(2).required(),
+  desc: Joi.string().required()
+});
+
+const daySchema = Joi.object({
+  day: Joi.number().required(),
+  title: Joi.string().required(),
+  attractions: Joi.array().items(attractionSchema).required()
+});
+
+const tripInfoSchema = Joi.object({
+  location: Joi.string().required(),
+  total_days: Joi.number().required(),
+  total_attractions: Joi.number().required(),
+  description: Joi.string().required()
+});
+
+const planSchema = Joi.object({
+  trip_title: Joi.string().required(),
+  days: Joi.array().items(daySchema).required(),
+  trip_info: tripInfoSchema.required()
+});
+
+function validatePlan(req, res, next) {
+  if (req.method === 'POST' || req.method === 'PUT') {
+    const { error } = planSchema.validate(req.body.plan_data);
+    if (error) return res.status(400).json({ error: 'invalid plan_data' });
+  }
+  next();
+}
+
+// 中间件：验证ing-form相关的请求参数
+function validateIngFormParams(req, res, next) {
+  try {
+    // 根据不同的请求方法和路径验证不同的参数
+    if (req.method === 'GET' && req.path.includes('/api/ing-forms/query')) {
+      // 验证查询接口的user_id参数
+      const { user_id } = req.query;
+      
+      if (!user_id) {
+        logger.warn('Missing required parameter: user_id');
+        return res.status(400).json({
+          success: false,
+          error: 'user_id is required'
+        });
+      }
+      
+      // 验证user_id的类型
+      const numericUserId = parseInt(user_id, 10);
+      if (isNaN(numericUserId) || numericUserId <= 0) {
+        logger.warn('Invalid user_id format', { user_id });
+        return res.status(400).json({
+          success: false,
+          error: 'user_id must be a positive integer'
+        });
+      }
+      
+      // 将验证后的user_id保存到请求对象中
+      req.validatedParams = {
+        user_id: numericUserId,
+        page: parseInt(req.query.page || 1, 10) || 1,
+        page_size: parseInt(req.query.page_size || 20, 10) || 20
+      };
+    } else if (req.method === 'POST') {
+      // 验证POST接口的参数
+      if (!req.body || typeof req.body !== 'object') {
+        logger.warn('Invalid request body format');
+        return res.status(400).json({
+          success: false,
+          error: 'Request body must be a valid JSON object'
+        });
+      }
+      
+      const { user_id, codeid } = req.body;
+      
+      if (!user_id || !codeid) {
+        logger.warn('Missing required parameters', { user_id, codeid });
+        return res.status(400).json({
+          success: false,
+          error: 'user_id and codeid are required'
+        });
+      }
+      
+      // 验证user_id的类型
+      const numericUserId = typeof user_id === 'string' ? parseInt(user_id, 10) : user_id;
+      if (typeof numericUserId !== 'number' || isNaN(numericUserId) || numericUserId <= 0) {
+        logger.warn('Invalid user_id format', { user_id });
+        return res.status(400).json({
+          success: false,
+          error: 'user_id must be a positive integer'
+        });
+      }
+      
+      // 验证codeid的类型
+      if (typeof codeid !== 'string' || codeid.trim() === '') {
+        logger.warn('Invalid codeid format', { codeid });
+        return res.status(400).json({
+          success: false,
+          error: 'codeid must be a non-empty string'
+        });
+      }
+      
+      // 保存验证后的参数
+      req.validatedParams = {
+        user_id: numericUserId,
+        codeid: codeid.trim()
+      };
+    }
+    
+    next();
+  } catch (error) {
+    logger.error('Error validating ing-form parameters:', error);
+    res.status(400).json({
+      success: false,
+      error: 'Invalid parameters'
+    });
+  }
+}
+
+// 中间件：验证JSON数据格式
+function validateJsonDataFormat(req, res, next) {
+  try {
+    const { json_data } = req.body;
+    
+    if (!json_data) {
+      logger.warn('Missing required parameter: json_data');
+      return res.status(400).json({
+        success: false,
+        error: 'json_data is required'
+      });
+    }
+    
+    // 尝试解析JSON数据以验证其有效性
+    const parsedJson = typeof json_data === 'string' ? JSON.parse(json_data) : json_data;
+    
+    if (typeof parsedJson !== 'object' || parsedJson === null) {
+      logger.warn('Invalid json_data format: not a valid JSON object');
+      return res.status(400).json({
+        success: false,
+        error: 'json_data must be a valid JSON object'
+      });
+    }
+    
+    // 保存验证后的JSON数据
+    req.validatedParams.json_data = parsedJson;
+    next();
+  } catch (error) {
+    logger.warn('Invalid JSON format', { error: error.message });
+    res.status(400).json({
+      success: false,
+      error: 'Invalid JSON format: ' + error.message
+    });
+  }
+}
+
+// 中间件：验证HTML内容
+function validateHtmlContent(req, res, next) {
+  try {
+    const { html_content } = req.body;
+    
+    if (!html_content) {
+      logger.warn('Missing required parameter: html_content');
+      return res.status(400).json({
+        success: false,
+        error: 'html_content is required'
+      });
+    }
+    
+    // 验证html_content的类型
+    if (typeof html_content !== 'string') {
+      logger.warn('Invalid html_content format: must be a string');
+      return res.status(400).json({
+        success: false,
+        error: 'html_content must be a string'
+      });
+    }
+    
+    // 对HTML内容进行XSS过滤
+    const sanitizedHtml = sanitizeHtml(html_content);
+    
+    // 保存验证和过滤后的HTML内容
+    req.validatedParams.html_content = sanitizedHtml;
+    next();
+  } catch (error) {
+    logger.error('Error validating HTML content:', error);
+    res.status(400).json({
+      success: false,
+      error: 'Invalid HTML content'
+    });
+  }
+}
+
+// ===== API路由处理函数 =====
+// 获取行程数据
+async function getTravelPlans(req, res) {
+  try {
+    const limit = Number(req.query.limit || 50);
+    const queryKeyword = req.query.query_keyword; // 修正参数获取方式
+    const userid = req.query.userid;
+    
+    logger.info(`获取行程数据请求: query_keyword=${queryKeyword}, userid=${userid}, limit=${limit}`);
+    
+    if (!queryKeyword) {
+      logger.warn('缺少query_keyword参数');
+      return res.status(400).json({ error: 'query_keyword参数是必需的' });
+    }
+    
+    // 根据是否有userid参数构建不同的查询语句
+    let query, params;
+    if (userid) {
+      // 如果提供了userid，同时查询userid和query_keyword
+      query = `
+        SELECT id, plan_data, query_keyword, userid, created_at 
+        FROM travel_plans 
+        WHERE query_keyword = $1 AND userid = $2 
+        ORDER BY created_at DESC 
+        LIMIT $3
+      `;
+      params = [queryKeyword, userid, limit];
+    } else {
+      // 只查询query_keyword
+      query = `
+        SELECT id, plan_data, query_keyword, userid, created_at 
+        FROM travel_plans 
+        WHERE query_keyword = $1 
+        ORDER BY created_at DESC 
+        LIMIT $2
+      `;
+      params = [queryKeyword, limit];
+    }
+    
+    const r = await pool.query(query, params);
+    logger.info(`成功获取${r.rows.length}条行程数据`);
+    res.json(r.rows);
+  } catch (e) {
+    logger.error('获取行程数据时出错:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+}
+
+// 创建新行程
+async function createTravelPlan(req, res) {
+  try {
+    const plan = req.body.plan_data;
+    const r = await pool.query(
+      'INSERT INTO travel_plans (plan_data, query_keyword) VALUES ($1::jsonb, $2) RETURNING id, plan_data, query_keyword, created_at',
+      [plan, req.queryKeyword]
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e) {
+    logger.error('Error creating travel plan:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+}
+
+// 更新行程
+async function updateTravelPlan(req, res) {
+  try {
+    const id = Number(req.params.id);
+    const plan = req.body.plan_data;
+    const r = await pool.query(
+      'UPDATE travel_plans SET plan_data = $1::jsonb WHERE id = $2 AND query_keyword = $3 RETURNING id, plan_data, query_keyword, created_at',
+      [plan, id, req.queryKeyword]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'not_found' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    logger.error('Error updating travel plan:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+}
+
+// 删除行程
+async function deleteTravelPlan(req, res) {
+  const { id } = req.params;
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    
+    const result = await client.query(
+      'DELETE FROM travel_plans WHERE id = $1 AND query_keyword = $2 RETURNING id',
+      [id, req.queryKeyword]
+    );
+
+    if (result.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Travel plan not found or unauthorized' });
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Travel plan deleted successfully' });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    logger.error('Error deleting travel plan:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+}
+
+// 新API接口：哈希加密并存储行程数据
+async function encryptAndStoreTravelPlan(req, res) {
+  let client;
+  
+  try {
+    // 获取数据库连接
+    client = await pool.connect();
+    
+    // 1. 提取必要字段，避免完整的深拷贝
+    // 只需要删除的字段是userid和query_keyword，其余字段可以直接保留
+    const { userid, query_keyword: queryKeyword, ...plan_data } = { ...req.body };
+    
+    // 2. 记录处理开始的日志
+    logger.info('Processing travel plan storage request', {
+      userid,
+      query_keyword: queryKeyword.substring(0, 10) + '...' // 记录query_keyword的前10个字符，保护隐私
+    });
+    
+    // 3. 开始数据库事务
+    await client.query('BEGIN');
+    
+    // 4. 插入数据到travel_plans表
+    const result = await client.query(
+      `INSERT INTO travel_plans (plan_data, query_keyword, userid) 
+       VALUES ($1, $2, $3) 
+       RETURNING id, created_at`,
+      [plan_data, queryKeyword, userid]
+    );
+    
+    // 5. 提交事务
+    await client.query('COMMIT');
+    
+    // 6. 记录成功存储的日志
+    const createdRecord = result.rows[0];
+    logger.info('Travel plan stored successfully', {
+      id: createdRecord.id,
+      userid,
+      created_at: createdRecord.created_at
+    });
+    
+    // 7. 返回成功响应，包含query_keyword和插入的数据信息
+    res.status(201).json({
+      success: true,
+      message: 'Travel plan stored successfully',
+      data: {
+        id: createdRecord.id,
+        query_keyword: queryKeyword,
+        userid: userid,
+        created_at: createdRecord.created_at
+      }
+    });
+    
+  } catch (error) {
+    // 如果出现错误，尝试回滚事务
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        logger.error('Error rolling back transaction:', rollbackError);
+      }
+    }
+    
+    // 区分不同类型的错误
+    if (error.code === '22P02') { // PostgreSQL类型错误
+      logger.error('Data type error when storing travel plan:', error);
+      res.status(400).json({
+        success: false,
+        error: 'Invalid data type in request'
+      });
+    } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') { // 数据库连接错误
+      logger.error('Database connection error:', error);
+      res.status(503).json({
+        success: false,
+        error: 'Database connection error'
+      });
+    } else {
+      logger.error('Error storing travel plan:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error during storage'
+      });
+    }
+  } finally {
+    // 确保释放连接
+    if (client) {
+      client.release();
+    }
+  }
+}
+
+// 用户注册接口函数
+async function registerUser(req, res) {
+  const client = await pool.connect();
+  
+  try {
+    const { phone, password, name } = req.body;
+    
+    // 开始数据库事务
+    await client.query('BEGIN');
+    
+    // 检查手机号是否已存在
+    const checkPhoneResult = await client.query(
+      'SELECT id FROM users WHERE phone = $1',
+      [phone]
+    );
+    
+    if (checkPhoneResult.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        error: 'Phone number already registered'
+      });
+    }
+    
+    // 生成盐值并加密密码（使用bcrypt）
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    
+    // 插入用户数据到users表
+    const result = await client.query(
+      `INSERT INTO users (phone, password, name) 
+       VALUES ($1, $2, $3) 
+       RETURNING id, phone, name, created_at, updated_at`,
+      [phone, hashedPassword, name]
+    );
+    
+    // 提交事务
+    await client.query('COMMIT');
+    
+    // 返回成功响应，不包含密码信息
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      data: {
+        id: result.rows[0].id,
+        phone: result.rows[0].phone,
+        name: result.rows[0].name,
+        created_at: result.rows[0].created_at,
+        updated_at: result.rows[0].updated_at
+      }
+    });
+    
+  } catch (error) {
+    // 如果出现错误，回滚事务
+    await client.query('ROLLBACK');
+    logger.error('Error registering user:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error during user registration'
+    });
+  } finally {
+    client.release();
+  }
+}
+
+// 用户登录接口函数
+async function queryUser(req, res) {
+  try {
+    const { phone, password } = req.body;
+    logger.info('Received login request', { phone });
+
+    // 基本参数验证
+    if (!phone || typeof phone !== 'string') {
+      logger.warn('Invalid phone parameter', { phone });
+      return res.status(400).json({ success: false, error: 'Phone number is required' });
+    }
+    
+    // 验证密码参数
+    if (!password || typeof password !== 'string') {
+      logger.warn('Password parameter missing or invalid', { phone });
+      return res.status(400).json({ success: false, error: 'Password is required' });
+    }
+
+    // 查询用户信息（包含密码用于验证）
+    const query = 'SELECT id, phone, name, password, avatar_path, created_at, updated_at FROM users WHERE phone = $1';
+    const result = await pool.query(query, [phone]);
+
+    if (result.rows.length === 0) {
+      logger.info('User not found', { phone });
+      return res.status(401).json({ success: false, error: 'Invalid phone or password' });
+    }
+
+    const userData = result.rows[0];
+    const storedPassword = userData.password;
+    
+    // 验证密码
+    const isPasswordValid = await bcrypt.compare(password, storedPassword);
+    
+    if (!isPasswordValid) {
+      logger.warn('Invalid password attempt', { phone, userId: userData.id });
+      return res.status(401).json({ success: false, error: 'Invalid phone or password' });
+    }
+    
+    // 登录成功，不返回密码信息
+    const { password: _, ...safeUserData } = userData;
+    
+    logger.info('Login successful', { userId: userData.id, phone });
+    res.json({ 
+      success: true, 
+      message: 'Login successful',
+      data: safeUserData 
+    });
+  } catch (error) {
+    logger.error('Error during user login:', { error: error.message, stack: error.stack });
+    res.status(500).json({ success: false, error: 'Internal server error during login process' });
+  }
+}
+
+// 处理表单数据提交的接口函数
+async function submitFormData(req, res) {
+  let client;
+  
+  try {
+    const { userid, codeid, html, code } = req.body;
+    logger.info('Received form data submission', { userid, codeid });
+
+    // 创建数据库客户端用于事务处理
+    client = await pool.connect();
+    
+    // 开始事务
+    await client.query('BEGIN');
+    
+    try {
+      // 对HTML内容进行XSS过滤
+      const sanitizedHtml = sanitizeHtml(html);
+      
+      // 准备插入语句
+      const insertQuery = `
+        INSERT INTO html (userid, codeid, html, code, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, NOW(), NOW())
+        RETURNING id, userid, codeid, created_at
+      `;
+      
+      // 执行插入
+      const result = await client.query(insertQuery, [
+        userid, 
+        codeid, 
+        sanitizedHtml, 
+        code || null
+      ]);
+      
+      // 提交事务
+      await client.query('COMMIT');
+      
+      // 获取插入的记录信息
+      const insertedRecord = result.rows[0];
+      logger.info('Form data inserted successfully', { 
+        recordId: insertedRecord.id,
+        userid: insertedRecord.userid,
+        codeid: insertedRecord.codeid
+      });
+      
+      // 返回成功响应
+      res.status(201).json({
+        success: true,
+        message: 'Form data submitted successfully',
+        data: {
+          id: insertedRecord.id,
+          userid: insertedRecord.userid,
+          codeid: insertedRecord.codeid,
+          created_at: insertedRecord.created_at
+        }
+      });
+    } catch (error) {
+      // 回滚事务
+      await client.query('ROLLBACK');
+      logger.error('Database transaction failed, rolled back', { error: error.message });
+      throw error; // 重新抛出错误以在外部catch中处理
+    }
+  } catch (error) {
+    logger.error('Error submitting form data:', error);
+    
+    // 根据错误类型返回不同的错误信息
+    if (error.code === '23505') {
+      // 唯一性约束错误
+      res.status(409).json({
+        success: false,
+        error: 'Record with this codeid already exists'
+      });
+    } else if (error.code) {
+      // 数据库特定错误
+      res.status(500).json({
+        success: false,
+        error: `Database error: ${error.message}`
+      });
+    } else {
+      // 其他错误
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error'
+      });
+    }
+  } finally {
+    // 确保释放数据库连接
+    if (client) {
+      client.release();
+    }
+  }
+}
+
+// ===== Swagger API文档配置 =====
+const swaggerSpec = {
+  openapi: '3.0.0',
+  info: { title: 'hd API', version: '1.0.0' },
+  servers: [{ url: 'http://localhost:3005' }],
+  paths: {
+    '/api/submit-form-data': {
+      post: {
+        summary: 'Submit form data to database',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  userid: { type: 'integer', description: 'User ID' },
+                  codeid: { type: 'string', description: 'Code ID' },
+                  html: { type: 'string', description: 'HTML content' },
+                  code: { type: 'string', description: 'Additional code description', nullable: true }
+                },
+                required: ['userid', 'codeid', 'html']
+              }
+            }
+          }
+        },
+        responses: {
+          '201': { description: 'Form data submitted successfully' },
+          '400': { description: 'Invalid request data' },
+          '409': { description: 'Record already exists' },
+          '500': { description: 'Internal server error' }
+        }
+      }
+    },
+    '/5173/{userid}/{codeid}': {
+      get: {
+        summary: 'Get HTML content',
+        parameters: [
+          { in: 'path', name: 'userid', required: true, schema: { type: 'integer' } },
+          { in: 'path', name: 'codeid', required: true, schema: { type: 'string' } }
+        ],
+        responses: {
+          '200': { description: 'Successfully retrieved HTML content' },
+          '400': { description: 'Invalid parameters' },
+          '404': { description: 'HTML content not found' },
+          '500': { description: 'Internal server error' }
+        }
+      }
+    },
+    '/api/data': {
+      get: {
+        parameters: [
+            { in: 'query', name: 'query_keyword', required: true, schema: { type: 'string' } },
+            { in: 'query', name: 'limit', required: false, schema: { type: 'integer' } }
+          ],
+        responses: { '200': { description: 'ok' } }
+      },
+      post: {
+        parameters: [
+          { in: 'query', name: 'query_keyword', required: true, schema: { type: 'string' } }
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { plan_data: { type: 'object' } }, required: ['plan_data'] } } }
+        },
+        responses: { '201': { description: 'created' } }
+      }
+    },
+    '/api/data/{id}': {
+      put: {
+        parameters: [
+          { in: 'path', name: 'id', required: true, schema: { type: 'integer' } },
+          { in: 'query', name: 'query_keyword', required: true, schema: { type: 'string' } }
+        ],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { plan_data: { type: 'object' } }, required: ['plan_data'] } } }
+        },
+        responses: { '200': { description: 'ok' }, '404': { description: 'not found' } }
+      },
+      delete: {
+        parameters: [
+          { in: 'path', name: 'id', required: true, schema: { type: 'integer' } },
+          { in: 'query', name: 'query_keyword', required: true, schema: { type: 'string' } }
+        ],
+        responses: { '200': { description: 'ok' }, '404': { description: 'not found' } }
+      }
+    },
+    '/api/users/login': {
+      post: {
+        summary: 'User login',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  phone: { type: 'string', description: 'User phone number' },
+                  password: { type: 'string', description: 'User password' }
+                },
+                required: ['phone', 'password']
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Login successful' },
+          '400': { description: 'Invalid parameters' },
+          '401': { description: 'Invalid phone or password' },
+          '500': { description: 'Internal server error during login process' }
+        }
+      }
+    }
+  }
+};
+
+// ===== Express应用配置 =====
+const app = express();
+const port = Number(process.env.PORT || 3005);
+
+// 确保日志目录存在
+if (!fs.existsSync('logs')) {
+  fs.mkdirSync('logs');
+}
+
+// 配置中间件
+app.use(helmet());
+// 配置CORS，允许所有源访问，支持多种HTTP方法和必要的请求头
+app.use(cors({
+  origin: '*', // 允许所有源访问
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // 支持的HTTP方法
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'], // 允许的请求头
+  credentials: true, // 允许携带凭证
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+}));
+app.use(express.json({ limit: '1mb' }));
+app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
+app.use(rateLimitMiddleware);
+
+// 获取HTML内容的接口
+async function getHtmlContent(req, res) {
+  try {
+    // 从查询参数获取userid和query_keyword
+    const userid = req.query.userid;
+    const queryKeyword = req.query.query_keyword;
+    
+    logger.info(`获取HTML内容请求: userid=${userid}, query_keyword=${queryKeyword}`);
+    
+    // 验证参数
+    if (!userid || !queryKeyword) {
+      logger.warn('缺少必需参数: userid或query_keyword');
+      return res.status(400).json({ error: 'userid和query_keyword参数是必需的' });
+    }
+    
+    // 查询数据库，使用query_keyword作为codeid进行查询
+    const query = `
+      SELECT html, codeid, userid 
+      FROM html 
+      WHERE userid = $1 AND codeid = $2 
+      ORDER BY created_at DESC 
+      LIMIT 1
+    `;
+    
+    const result = await pool.query(query, [userid, queryKeyword]);
+    
+    if (result.rows.length === 0) {
+      logger.warn(`未找到用户${userid}的query_keyword=${queryKeyword}对应的HTML内容`);
+      return res.status(404).json({ error: '未找到对应的HTML内容' });
+    }
+    
+    const htmlData = result.rows[0];
+    logger.info(`成功获取用户${userid}的HTML内容，query_keyword=${queryKeyword}`);
+    
+    // 返回数据，使用query_keyword作为字段名以保持一致性
+    res.status(200).json({
+      html: htmlData.html,
+      query_keyword: htmlData.codeid,
+      userid: htmlData.userid
+    });
+  } catch (error) {
+    logger.error('Error retrieving HTML content:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// 定义API路由
+  
+  // 新增/query/html路由接口，用于获取HTML内容
+  app.get('/query/html', getHtmlContent);
+  
+  // 添加测试数据的接口（仅用于开发环境）
+  app.get('/api/test/insert-data', async (req, res) => {
+    try {
+      const insertQuery = `
+        INSERT INTO html (codeid, userid, html, code, created_at, updated_at)
+        VALUES (
+          'test_plan_001',
+          12345,
+          '<div style="font-family: Arial, sans-serif; padding: 20px;">
+            <h1>旅行计划详情</h1>
+            <div class="travel-info">
+              <h2>北京三日游</h2>
+              <p>这是一个精彩的北京三日游计划，包含了以下景点：</p>
+              <ul>
+                <li>故宫博物院</li>
+                <li>长城</li>
+                <li>天坛公园</li>
+                <li>颐和园</li>
+                <li>王府井大街</li>
+              </ul>
+              <div class="plan-details">
+                <h3>行程安排</h3>
+                <p><strong>第一天：</strong>故宫博物院 - 王府井大街</p>
+                <p><strong>第二天：</strong>长城一日游</p>
+                <p><strong>第三天：</strong>天坛公园 - 颐和园</p>
+              </div>
+              <div class="tips">
+                <h3>旅行贴士</h3>
+                <p>• 建议提前预订故宫门票</p>
+                <p>• 长城游览建议穿舒适的鞋子</p>
+                <p>• 带好防晒用品和足够的水</p>
+              </div>
+            </div>
+          </div>',
+          '北京旅游攻略',
+          NOW(),
+          NOW()
+        );
+      `;
+      
+      await pool.query(insertQuery);
+      logger.info('Test data inserted successfully');
+      res.status(200).json({ message: 'Test data inserted successfully' });
+    } catch (error) {
+      logger.error('Error inserting test data:', error);
+      res.status(500).json({ error: 'Failed to insert test data' });
+    }
+  });
+  
+  app.get('/api/data', requireKeyword, getTravelPlans);
+  app.post('/api/data', requireKeyword, validatePlan, createTravelPlan);
+  app.put('/api/data/:id', requireKeyword, validatePlan, updateTravelPlan);
+  app.delete('/api/data/:id', requireKeyword, deleteTravelPlan);
+  
+  // 用户注册接口路由
+  /**
+   * @swagger
+   * /api/users/register: 
+   *   post:
+   *     summary: 用户注册
+   *     description: 接收用户注册信息，验证并安全存储用户数据
+   *     tags: [Users]
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required:
+   *               - phone
+   *               - password
+   *               - name
+   *             properties:
+   *               phone: 
+   *                 type: string
+   *                 description: 手机号码，必须是有效的中国大陆手机号
+   *                 example: 13812345678
+   *               password: 
+   *                 type: string
+   *                 description: 密码，长度在6-60个字符之间
+   *                 example: Password123
+   *               name: 
+   *                 type: string
+   *                 description: 用户名，长度在1-50个字符之间
+   *                 example: John Doe
+   *     responses:
+   *       201:
+   *         description: 用户注册成功
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: 
+   *                   type: boolean
+   *                   example: true
+   *                 message: 
+   *                   type: string
+   *                   example: User registered successfully
+   *                 data:
+   *                   type: object
+   *                   properties:
+   *                     id:
+   *                       type: integer
+   *                     phone:
+   *                       type: string
+   *                     name:
+   *                       type: string
+   *                     created_at:
+   *                       type: string
+   *                       format: date-time
+   *                     updated_at:
+   *                       type: string
+   *                       format: date-time
+   *       400:
+   *         description: 请求参数错误或手机号已存在
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: 
+   *                   type: boolean
+   *                   example: false
+   *                 error: 
+   *                   type: string
+   *                   example: Phone number already registered
+   *       500:
+   *         description: 服务器内部错误
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: 
+   *                   type: boolean
+   *                   example: false
+   *                 error: 
+   *                   type: string
+   *                   example: Internal server error during user registration
+   */
+  app.post('/api/users/register', validateUserRegistration, registerUser);
+
+  // 用户查询接口路由
+  /**
+   * @swagger
+   * /api/users/query: 
+   *   post:
+   *     summary: 用户查询
+   *     description: 根据手机号和密码查询用户信息
+   *     tags: [Users]
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required:
+   *               - phone
+   *               - password
+   *             properties:
+   *               phone: 
+   *                 type: string
+   *                 description: 手机号码
+   *                 example: 13812345678
+   *               password: 
+   *                 type: string
+   *                 description: 密码
+   *                 example: Password123
+   *     responses:
+   *       200:
+   *         description: 用户查询成功
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: 
+   *                   type: boolean
+   *                   example: true
+   *                 message: 
+   *                   type: string
+   *                   example: User retrieved successfully
+   *                 data:
+   *                   type: object
+   *                   properties:
+   *                     id:
+   *                       type: integer
+   *                     phone:
+   *                       type: string
+   *                     name:
+   *                       type: string
+   *                     created_at:
+   *                       type: string
+   *                       format: date-time
+   *                     updated_at:
+   *                       type: string
+   *                       format: date-time
+   *       401:
+   *         description: 密码错误
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: 
+   *                   type: boolean
+   *                   example: false
+   *                 error: 
+   *                   type: string
+   *                   example: Invalid password
+   *       404:
+   *         description: 用户不存在
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: 
+   *                   type: boolean
+   *                   example: false
+   *                 error: 
+   *                   type: string
+   *                   example: User not found
+   *       500:
+   *         description: 服务器内部错误
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success: 
+   *                   type: boolean
+   *                   example: false
+   *                 error: 
+   *                   type: string
+   *                   example: Internal server error during user query
+   */
+  app.post('/api/users/login', queryUser);
+
+  // 根据userid查询travel_plans的接口函数
+async function getTravelPlansByUserId(req, res) {
+  const startTime = Date.now();
+  let client;
+  
+  try {
+    // 验证userid参数
+    const { userid } = req.body;
+    
+    // 参数验证
+    if (!userid) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'userid parameter is required' 
+      });
+    }
+    
+    // 验证userid类型并转换为数字
+    const numericUserId = Number(userid);
+    if (isNaN(numericUserId) || numericUserId <= 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'userid must be a positive number' 
+      });
+    }
+    
+    // 获取数据库连接
+    client = await pool.connect();
+    
+    // 使用参数化查询防止SQL注入
+    const query = 'SELECT * FROM travel_plans WHERE userid = $1 ORDER BY created_at DESC';
+    const result = await client.query(query, [numericUserId]);
+    
+    // 计算响应时间
+    const responseTime = Date.now() - startTime;
+    logger.info('Travel plans retrieved successfully', {
+      userid: numericUserId,
+      count: result.rows.length,
+      response_time: responseTime
+    });
+    
+    // 如果响应时间超过400ms，记录警告
+    if (responseTime > 400) {
+      logger.warn('Slow API response', {
+        endpoint: '/api/data/user',
+        response_time: responseTime,
+        userid: numericUserId
+      });
+    }
+    
+    // 返回查询结果（空数组或数据数组）
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+      response_time: responseTime
+    });
+    
+  } catch (error) {
+    const responseTime = Date.now() - startTime;
+    logger.error('Error querying travel plans by userid:', {
+      error: error.message,
+      response_time: responseTime,
+      stack: error.stack
+    });
+    
+    // 区分不同类型的错误
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      res.status(503).json({ 
+        success: false, 
+        error: 'Database connection error' 
+      });
+    } else {
+      res.status(500).json({ 
+        success: false, 
+        error: 'Internal server error during query' 
+      });
+    }
+  } finally {
+    // 确保释放数据库连接
+    if (client) {
+      client.release();
+    }
+  }
+}
+
+// 表单数据提交接口（包含安全中间件）
+  app.post('/api/submit-form-data', rateLimiterMiddleware, basicAuthMiddleware, validateFormData, submitFormData);
+  
+
+  // 新API接口：哈希加密并存储行程数据
+  /**
+   * @swagger
+   * /api/data/encrypt: 
+   *   post:
+   *     summary: 加密并存储行程数据
+   *     description: 接收JSON数据，进行SHA-256哈希加密，提取userid，将处理后数据存储到数据库
+   *     tags:
+   *       - Travel Plans
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required:
+   *               - userid
+   *             properties:
+   *               userid:
+   *                 type: integer
+   *                 description: 用户ID（必需，正整数）
+   *               trip_title:
+   *                 type: string
+   *                 description: 行程标题
+   *               days:
+   *                 type: array
+   *                 items:
+   *                   type: object
+   *               trip_info:
+   *                 type: object
+   *     responses:
+   *       201:
+   *         description: 数据加密并存储成功
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success:
+   *                   type: boolean
+   *                 message:
+   *                   type: string
+   *                 data:
+   *                   type: object
+   *                   properties:
+   *                     id:
+   *                       type: integer
+   *                     query_keyword:
+   *                       type: string
+   *                     userid:
+   *                       type: integer
+   *                     created_at:
+   *                       type: string
+   *       400:
+   *         description: 请求数据格式错误
+   *       500:
+   *         description: 服务器内部错误
+   */
+  app.post('/api/data/encrypt', validateJsonData, validateTravelPlanRequest, encryptAndStoreTravelPlan);
+  
+  // 根据userid查询行程计划的接口路由
+  /**
+   * @swagger
+   * /api/data/user: 
+   *   post:
+   *     summary: 根据用户ID查询行程计划
+   *     description: 接收userid参数，返回该用户的所有行程计划记录
+   *     tags: [Travel Plans]
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required:
+   *               - userid
+   *             properties:
+   *               userid:
+   *                 type: integer
+   *                 description: 用户ID（必需，正整数）
+   *                 example: 12345
+   *     responses:
+   *       200:
+   *         description: 查询成功，返回行程计划数组
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success:
+   *                   type: boolean
+   *                 data:
+   *                   type: array
+   *                   items:
+   *                     type: object
+   *                 count:
+   *                   type: integer
+   *                 response_time:
+   *                   type: integer
+   *       400:
+   *         description: 请求参数错误
+   *       401:
+   *         description: 未授权访问
+   *       429:
+   *         description: 请求频率过高
+   *       500:
+   *         description: 服务器内部错误
+   *       503:
+   *         description: 数据库连接错误
+   */
+  // 添加速率限制中间件，使用user_id参数验证替代基本认证
+  app.post('/api/data/user', rateLimiterMiddleware, getTravelPlansByUserId);
+
+// 统一参数验证中间件
+function validateIngFormParams(req, res, next) {
+  try {
+    // 从请求中获取参数（GET从query，POST从body）
+    const params = req.method === 'GET' ? req.query : req.body;
+    
+    // 提取所需参数
+    const { user_id, codeid, page, page_size, json_data, html_content } = params;
+    
+    // 统一验证逻辑
+    const validatedParams = {};
+    
+    // 验证user_id（所有接口都需要）
+    if (user_id === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameter: user_id'
+      });
+    }
+    
+    // 将user_id转换为数字
+    validatedParams.user_id = Number(user_id);
+    if (isNaN(validatedParams.user_id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id must be a valid number'
+      });
+    }
+    
+    // 对于需要codeid的接口（update和create）
+    if ((req.path.includes('/update') || req.path.includes('/create')) && codeid === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameter: codeid'
+      });
+    }
+    
+    if (codeid !== undefined) {
+      validatedParams.codeid = codeid;
+    }
+    
+    // 对于query接口的分页参数
+    if (req.path.includes('/query')) {
+      validatedParams.page = page ? Number(page) : 1;
+      validatedParams.page_size = page_size ? Number(page_size) : 20;
+      
+      // 验证分页参数
+      if (isNaN(validatedParams.page) || validatedParams.page < 1) {
+        validatedParams.page = 1;
+      }
+      if (isNaN(validatedParams.page_size) || validatedParams.page_size < 1 || validatedParams.page_size > 100) {
+        validatedParams.page_size = 20;
+      }
+    }
+    
+    // 对于update-json接口
+    if (req.path.includes('/update-json') && json_data !== undefined) {
+      try {
+        // 确保json_data是有效的JSON对象
+        const parsedJson = typeof json_data === 'string' ? JSON.parse(json_data) : json_data;
+        if (typeof parsedJson !== 'object' || parsedJson === null) {
+          throw new Error('Invalid JSON object');
+        }
+        validatedParams.json_data = parsedJson;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid json_data format'
+        });
+      }
+    }
+    
+    // 对于update-html接口
+    if (req.path.includes('/update-html') && html_content !== undefined) {
+      if (typeof html_content !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'html_content must be a string'
+        });
+      }
+      // 存储原始的html_content，validateHtmlContent中间件会处理过滤
+      validatedParams.html_content = html_content;
+    }
+    
+    // 将验证后的参数附加到请求对象
+    req.validatedParams = validatedParams;
+    next();
+  } catch (error) {
+    logger.error('Parameter validation error:', error);
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid request parameters'
+    });
+  }
+}
+
+// 增强版错误处理中间件
+function enhancedErrorHandler(err, req, res, next) {
+  const startTime = req.startTime || Date.now();
+  const responseTime = Date.now() - startTime;
+  
+  // 记录详细的错误信息
+  logger.error('API Error:', {
+    error: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    ip: req.ip,
+    user_id: req.validatedParams?.user_id,
+    response_time: responseTime + 'ms'
+  });
+  
+  // 检查是否是已知的错误类型
+  if (err.name === 'SyntaxError' && err instanceof SyntaxError) {
+    // JSON解析错误
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid JSON format in request body',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+  
+  if (err.type === 'entity.too.large') {
+    // 请求体过大
+    return res.status(413).json({
+      success: false,
+      error: 'Request body too large'
+    });
+  }
+  
+  // 数据库相关错误
+  if (err.code) {
+    switch (err.code) {
+      case 'ECONNREFUSED':
+      case 'ENOTFOUND':
+        return res.status(503).json({
+          success: false,
+          error: 'Database connection error'
+        });
+      case '23505':
+        return res.status(409).json({
+          success: false,
+          error: 'Conflict: Record already exists'
+        });
+      case '23503':
+        return res.status(400).json({
+          success: false,
+          error: 'Foreign key constraint violation'
+        });
+      case '22P02':
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid data type provided'
+        });
+      default:
+        return res.status(500).json({
+          success: false,
+          error: 'Database error',
+          code: process.env.NODE_ENV === 'development' ? err.code : undefined
+        });
+    }
+  }
+  
+  // 业务逻辑错误（通过自定义属性识别）
+  if (err.isBusinessError) {
+    return res.status(err.statusCode || 400).json({
+      success: false,
+      error: err.message
+    });
+  }
+  
+  // 超时错误处理
+  if (err.message && err.message.includes('timeout')) {
+    return res.status(504).json({
+      success: false,
+      error: 'Request timed out'
+    });
+  }
+  
+  // 默认错误响应
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    // 在开发环境可以返回更多详情
+    ...(process.env.NODE_ENV === 'development' && { details: err.message })
+  });
+}
+
+// 性能监控中间件
+// 请求ID中间件，用于跟踪整个请求生命周期
+function requestIdMiddleware(req, res, next) {
+  req.requestId = crypto.randomUUID();
+  res.setHeader('X-Request-ID', req.requestId);
+  next();
+}
+
+// 数据加密工具函数
+function encryptSensitiveData(data) {
+  if (!data || typeof data !== 'object') return data;
+  
+  const sensitiveFields = ['phone', 'email', 'address', 'credit_card', 'password'];
+  const encryptedData = { ...data };
+  
+  sensitiveFields.forEach(field => {
+    if (encryptedData[field]) {
+      // 使用简单的哈希处理，实际生产环境应使用更安全的加密算法
+      const hashedValue = crypto.createHash('sha256').update(String(encryptedData[field])).digest('hex').substring(0, 16);
+      encryptedData[field] = `***${hashedValue}***`;
+    }
+  });
+  
+  return encryptedData;
+}
+
+// 高级性能监控和日志记录中间件
+function advancedMonitoring(req, res, next) {
+  req.startTime = Date.now();
+  req.dbOperations = [];
+  
+  // 记录请求开始
+  const logData = {
+    request_id: req.requestId,
+    path: req.path,
+    method: req.method,
+    ip: req.ip,
+    user_agent: req.headers['user-agent']
+  };
+  
+  // 只记录非敏感的请求参数
+  if (Object.keys(req.query).length > 0) {
+    logData.query_params = encryptSensitiveData(req.query);
+  }
+  
+  if (Object.keys(req.body).length > 0 && !req.path.includes('/login') && !req.path.includes('/register')) {
+    logData.body_params = encryptSensitiveData(req.body);
+  }
+  
+  logger.info('API Request Received', logData);
+  
+  // 拦截响应函数，添加响应时间日志和性能监控
+  const originalSend = res.send;
+  res.send = function(body) {
+    const responseTime = Date.now() - req.startTime;
+    
+    // 构建响应日志
+    const responseLog = {
+      request_id: req.requestId,
+      path: req.path,
+      method: req.method,
+      status_code: res.statusCode,
+      response_time: responseTime + 'ms'
+    };
+    
+    // 如果有验证参数，记录user_id
+    if (req.validatedParams?.user_id) {
+      responseLog.user_id = req.validatedParams.user_id;
+    }
+    
+    // 记录数据库操作统计
+    if (req.dbOperations && req.dbOperations.length > 0) {
+      const totalDbTime = req.dbOperations.reduce((sum, op) => sum + op.time, 0);
+      responseLog.db_operations = {
+        count: req.dbOperations.length,
+        total_time: totalDbTime + 'ms',
+        operations: req.dbOperations.map(op => ({ 
+          type: op.type,
+          time: op.time + 'ms'
+        }))
+      };
+    }
+    
+    // 根据响应时间和状态码记录不同级别的日志
+    if (responseTime > 500) {
+      logger.warn('Slow API Response', { ...responseLog, warning: 'Response time exceeds 500ms threshold' });
+    } else if (res.statusCode >= 500) {
+      logger.error('API Error Response', responseLog);
+    } else if (res.statusCode >= 400) {
+      logger.warn('API Client Error', responseLog);
+    } else {
+      logger.info('API Successful Response', responseLog);
+    }
+    
+    // 设置响应头
+    res.setHeader('X-Response-Time', responseTime + 'ms');
+    res.setHeader('X-DB-Operations', (req.dbOperations?.length || 0).toString());
+    
+    return originalSend.call(this, body);
+  };
+  
+  // 请求超时处理
+  const timeoutId = setTimeout(() => {
+    const timeoutLog = {
+      request_id: req.requestId,
+      path: req.path,
+      method: req.method,
+      elapsed_time: '500ms',
+      warning: 'Request approaching timeout threshold'
+    };
+    logger.warn('Request Timeout Warning', timeoutLog);
+  }, 400); // 在500ms阈值前100ms发出警告
+  
+  res.on('finish', () => clearTimeout(timeoutId));
+  
+  next();
+}
+
+// 数据库操作包装函数，用于性能监控
+async function monitoredDbOperation(operationType, queryFn, ...args) {
+  const startTime = Date.now();
+  try {
+    // 分离请求上下文对象（如果存在）
+    let reqContext = null;
+    let queryArgs = [...args];
+    
+    // 检查最后一个参数是否是包含req的上下文对象
+    if (queryArgs.length > 0 && 
+        typeof queryArgs[queryArgs.length - 1] === 'object' && 
+        queryArgs[queryArgs.length - 1] && 
+        queryArgs[queryArgs.length - 1].req) {
+      reqContext = queryArgs.pop(); // 移除上下文对象
+    }
+    
+    // 执行查询
+    const result = await queryFn(...queryArgs);
+    const endTime = Date.now();
+    
+    // 如果有请求上下文，记录操作时间
+    if (reqContext && reqContext.req && reqContext.req.dbOperations) {
+      reqContext.req.dbOperations.push({
+        type: operationType,
+        time: endTime - startTime
+      });
+    }
+    
+    // 记录慢速数据库操作
+    if (endTime - startTime > 200) {
+      logger.warn('Slow Database Operation', {
+        operation_type: operationType,
+        execution_time: (endTime - startTime) + 'ms'
+      });
+    }
+    
+    return result;
+  } catch (error) {
+    const endTime = Date.now();
+    logger.error('Database Operation Error', {
+      operation_type: operationType,
+      execution_time: (endTime - startTime) + 'ms',
+      error: error.message
+    });
+    throw error;
+  }
+}
+
+// 保持向后兼容性的性能监控中间件
+function performanceMonitor(req, res, next) {
+  // 如果没有请求ID，先设置一个
+  if (!req.requestId) {
+    req.requestId = crypto.randomUUID();
+  }
+  // 使用高级监控中间件
+  advancedMonitoring(req, res, next);
+}
+
+// ing-form相关接口路由 - 使用增强的中间件链（请求ID + 性能监控 + 参数验证）
+app.get('/api/ing-forms/query', requestIdMiddleware, performanceMonitor, validateIngFormParams, queryIngForms);
+app.post('/api/ing-forms/update-json', requestIdMiddleware, performanceMonitor, validateIngFormParams, validateJsonDataFormat, updateJsonData);
+app.post('/api/ing-forms/update-html', requestIdMiddleware, performanceMonitor, validateIngFormParams, validateHtmlContent, updateHtmlContent);
+app.post('/api/ing-forms/create', requestIdMiddleware, performanceMonitor, validateIngFormParams, createIngFormRecord);
+
+// 配置Swagger文档
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// 查询接口：/api/ing-forms/query
+/**
+ * @swagger
+ * /api/ing-forms/query:
+ *   get:
+ *     summary: 查询ing表单数据
+ *     description: 根据user_id查询所有匹配的表单记录，支持分页
+ *     tags: [Ing Forms]
+ *     parameters:
+ *       - in: query
+ *         name: user_id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: 用户ID
+ *       - in: query
+ *         name: page
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: 页码，默认1
+ *       - in: query
+ *         name: page_size
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *         description: 每页记录数，默认20
+ *     responses:
+ *       200:
+ *         description: 查询成功，返回匹配的记录
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       json:
+ *                         type: string
+ *                       html:
+ *                         type: string
+ *                       codeid:
+ *                         type: string
+ *                       user_id:
+ *                         type: integer
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     current_page:
+ *                       type: integer
+ *                     page_size:
+ *                       type: integer
+ *                     total_items:
+ *                       type: integer
+ *                     total_pages:
+ *                       type: integer
+ *       400:
+ *         description: 参数错误
+ *       404:
+ *         description: 未找到匹配的记录
+ */
+async function queryIngForms(req, res) {
+  try {
+    const { user_id, page, page_size } = req.validatedParams;
+    logger.info('Querying ing forms', { 
+      user_id, 
+      page, 
+      page_size,
+      request_id: req.requestId
+    });
+    
+    const offset = (page - 1) * page_size;
+    
+    // 查询匹配的记录，使用参数化查询防止SQL注入，并用监控函数包装
+    const queryResult = await monitoredDbOperation('SELECT', pool.query.bind(pool),
+      'SELECT id, json, html, codeid, user_id FROM ing WHERE user_id = $1 ORDER BY id DESC LIMIT $2 OFFSET $3',
+      [user_id, page_size, offset],
+      { req } // 传递请求上下文用于性能跟踪
+    );
+    
+    // 查询总记录数，用监控函数包装
+    const countResult = await monitoredDbOperation('COUNT', pool.query.bind(pool),
+      'SELECT COUNT(*) FROM ing WHERE user_id = $1',
+      [user_id],
+      { req }
+    );
+    
+    const totalItems = parseInt(countResult.rows[0].count, 10);
+    const totalPages = Math.ceil(totalItems / page_size);
+    
+    // 如果没有找到记录，返回404
+    if (queryResult.rows.length === 0) {
+      logger.info('No ing forms found', { 
+        user_id,
+        request_id: req.requestId
+      });
+      return res.status(404).json({
+        success: false,
+        error: 'No records found for this user_id'
+      });
+    }
+    
+    const response = {
+      success: true,
+      data: queryResult.rows,
+      pagination: {
+        current_page: page,
+        page_size: page_size,
+        total_items: totalItems,
+        total_pages: totalPages
+      }
+    };
+    
+    logger.info('Query completed successfully', { 
+      user_id, 
+      records_found: queryResult.rows.length,
+      request_id: req.requestId
+    });
+    
+    res.json(response);
+  } catch (error) {
+    const responseTime = Date.now() - startTime;
+    logger.error('Error querying ing forms:', { error: error.message, response_time: responseTime + 'ms' });
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+}
+
+// JSON数据更新接口：/api/ing-forms/update-json
+/**
+ * @swagger
+ * /api/ing-forms/update-json:
+ *   post:
+ *     summary: 更新ing表单的JSON数据
+ *     description: 根据user_id和codeid查找记录，并更新其JSON字段
+ *     tags: [Ing Forms]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               user_id:
+ *                 type: integer
+ *                 required: true
+ *                 description: 用户ID
+ *               codeid:
+ *                 type: string
+ *                 required: true
+ *                 description: 表单唯一标识
+ *               json_data:
+ *                 type: object
+ *                 required: true
+ *                 description: 要更新的JSON内容
+ *     responses:
+ *       200:
+ *         description: 更新成功，返回更新后的记录
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     json:
+ *                       type: string
+ *                     html:
+ *                       type: string
+ *                     codeid:
+ *                       type: string
+ *                     user_id:
+ *                       type: integer
+ *       400:
+ *         description: 参数错误
+ *       404:
+ *         description: 未找到匹配的记录
+ *       500:
+ *         description: 服务器内部错误
+ */
+async function updateJsonData(req, res) {
+  let client = null;
+  
+  try {
+    const { user_id, codeid, json_data } = req.validatedParams;
+    logger.info('Updating JSON data for ing form', { 
+      user_id, 
+      codeid,
+      request_id: req.requestId
+    });
+    
+    // 开始事务
+    client = await pool.connect();
+    await monitoredDbOperation('BEGIN_TRANSACTION', client.query.bind(client),
+      'BEGIN',
+      [],
+      { req }
+    );
+    
+    // 查找匹配的记录，用监控函数包装
+    const findQuery = `
+      SELECT id FROM ing WHERE user_id = $1 AND codeid = $2
+    `;
+    const findResult = await monitoredDbOperation('SELECT', client.query.bind(client),
+      findQuery, 
+      [user_id, codeid],
+      { req }
+    );
+    
+    if (findResult.rows.length === 0) {
+      logger.warn('No matching record found for update', { 
+        user_id, 
+        codeid,
+        request_id: req.requestId
+      });
+      await monitoredDbOperation('ROLLBACK_TRANSACTION', client.query.bind(client),
+        'ROLLBACK',
+        [],
+        { req }
+      );
+      return res.status(404).json({
+        success: false,
+        error: 'No record found matching the specified user_id and codeid'
+      });
+    }
+    
+    const recordId = findResult.rows[0].id;
+    const jsonString = JSON.stringify(json_data);
+    
+    // 更新记录，用监控函数包装
+    const updateQuery = `
+      UPDATE ing 
+      SET json = $1 
+      WHERE id = $2 
+      RETURNING id, json, html, codeid, user_id
+    `;
+    const updateResult = await monitoredDbOperation('UPDATE', client.query.bind(client),
+      updateQuery, 
+      [jsonString, recordId],
+      { req }
+    );
+    
+    // 提交事务，用监控函数包装
+    await monitoredDbOperation('COMMIT_TRANSACTION', client.query.bind(client),
+      'COMMIT',
+      [],
+      { req }
+    );
+    
+    logger.info('JSON data updated successfully', { 
+      user_id, 
+      codeid, 
+      record_id: recordId,
+      request_id: req.requestId
+    });
+    
+    res.json({
+      success: true,
+      data: updateResult.rows[0]
+    });
+  } catch (error) {
+    // 如果发生错误，回滚事务
+    if (client) {
+      try {
+        await monitoredDbOperation('ROLLBACK_TRANSACTION', client.query.bind(client),
+          'ROLLBACK',
+          [],
+          { req }
+        );
+      } catch (rollbackError) {
+        logger.error('Failed to rollback transaction:', { error: rollbackError.message });
+      }
+    }
+    
+    logger.error('Error updating JSON data:', { 
+      error: error.message,
+      request_id: req.requestId
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  } finally {
+    // 确保释放客户端连接
+    if (client) {
+      try {
+        client.release();
+        logger.debug('Database connection released', { request_id: req.requestId });
+      } catch (releaseError) {
+        logger.error('Failed to release database connection:', { 
+          error: releaseError.message,
+          request_id: req.requestId
+        });
+      }
+    }
+  }
+}
+
+// HTML更新接口：/api/ing-forms/update-html
+/**
+ * @swagger
+ * /api/ing-forms/update-html:
+ *   post:
+ *     summary: 更新ing表单的HTML内容
+ *     description: 根据user_id和codeid查找记录，并更新其HTML字段
+ *     tags: [Ing Forms]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               user_id:
+ *                 type: integer
+ *                 required: true
+ *                 description: 用户ID
+ *               codeid:
+ *                 type: string
+ *                 required: true
+ *                 description: 表单唯一标识
+ *               html_content:
+ *                 type: string
+ *                 required: true
+ *                 description: 要更新的HTML内容
+ *     responses:
+ *       200:
+ *         description: 更新成功，返回更新后的记录
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     json:
+ *                       type: string
+ *                     html:
+ *                       type: string
+ *                     codeid:
+ *                       type: string
+ *                     user_id:
+ *                       type: integer
+ *       400:
+ *         description: 参数错误
+ *       404:
+ *         description: 未找到匹配的记录
+ *       500:
+ *         description: 服务器内部错误
+ */
+async function updateHtmlContent(req, res) {
+  let client = null;
+  
+  try {
+    const { user_id, codeid, html_content } = req.validatedParams;
+    logger.info('Updating HTML content for ing form', { 
+      user_id, 
+      codeid,
+      request_id: req.requestId
+    });
+    
+    // 开始事务
+    client = await pool.connect();
+    await monitoredDbOperation('BEGIN_TRANSACTION', client.query.bind(client),
+      'BEGIN',
+      [],
+      { req }
+    );
+    
+    // 查找匹配的记录，用监控函数包装
+    const findQuery = `
+      SELECT id FROM ing WHERE user_id = $1 AND codeid = $2
+    `;
+    const findResult = await monitoredDbOperation('SELECT', client.query.bind(client),
+      findQuery, 
+      [user_id, codeid],
+      { req }
+    );
+    
+    if (findResult.rows.length === 0) {
+      logger.warn('No matching record found for update', { 
+        user_id, 
+        codeid,
+        request_id: req.requestId
+      });
+      await monitoredDbOperation('ROLLBACK_TRANSACTION', client.query.bind(client),
+        'ROLLBACK',
+        [],
+        { req }
+      );
+      return res.status(404).json({
+        success: false,
+        error: 'No record found matching the specified user_id and codeid'
+      });
+    }
+    
+    const recordId = findResult.rows[0].id;
+    
+    // 更新记录，用监控函数包装
+    const updateQuery = `
+      UPDATE ing 
+      SET html = $1 
+      WHERE id = $2 
+      RETURNING id, json, html, codeid, user_id
+    `;
+    const updateResult = await monitoredDbOperation('UPDATE', client.query.bind(client),
+      updateQuery, 
+      [html_content, recordId],
+      { req }
+    );
+    
+    // 提交事务，用监控函数包装
+    await monitoredDbOperation('COMMIT_TRANSACTION', client.query.bind(client),
+      'COMMIT',
+      [],
+      { req }
+    );
+    
+    logger.info('HTML content updated successfully', { 
+      user_id, 
+      codeid, 
+      record_id: recordId,
+      request_id: req.requestId
+    });
+    
+    res.json({
+      success: true,
+      data: updateResult.rows[0]
+    });
+  } catch (error) {
+    // 如果发生错误，回滚事务
+    if (client) {
+      try {
+        await monitoredDbOperation('ROLLBACK_TRANSACTION', client.query.bind(client),
+          'ROLLBACK',
+          [],
+          { req }
+        );
+      } catch (rollbackError) {
+        logger.error('Failed to rollback transaction:', { error: rollbackError.message });
+      }
+    }
+    
+    logger.error('Error updating HTML content:', { 
+      error: error.message,
+      request_id: req.requestId
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  } finally {
+    // 确保释放客户端连接
+    if (client) {
+      client.release();
+    }
+  }
+}
+
+// 创建记录接口：/api/ing-forms/create
+/**
+ * @swagger
+ * /api/ing-forms/create:
+ *   post:
+ *     summary: 创建ing表单记录
+ *     description: 创建包含指定user_id和codeid的新记录
+ *     tags: [Ing Forms]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               user_id:
+ *                 type: integer
+ *                 required: true
+ *                 description: 用户ID
+ *               codeid:
+ *                 type: string
+ *                 required: true
+ *                 description: 表单唯一标识
+ *     responses:
+ *       201:
+ *         description: 创建成功，返回新创建的记录
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     json:
+ *                       type: string
+ *                     html:
+ *                       type: string
+ *                     codeid:
+ *                       type: string
+ *                     user_id:
+ *                       type: integer
+ *       400:
+ *         description: 参数错误或记录已存在
+ *       500:
+ *         description: 服务器内部错误
+ */
+async function createIngFormRecord(req, res) {
+  let client = null;
+  
+  try {
+    const { user_id, codeid } = req.validatedParams;
+    logger.info('Creating new ing form record', { 
+      user_id, 
+      codeid,
+      request_id: req.requestId
+    });
+    
+    // 开始事务
+    client = await pool.connect();
+    await monitoredDbOperation('BEGIN_TRANSACTION', client.query.bind(client),
+      'BEGIN',
+      { req }
+    );
+    
+    // 检查是否已存在相同的user_id和codeid组合
+    const checkQuery = `
+      SELECT id FROM ing WHERE user_id = $1 AND codeid = $2
+    `;
+    const checkResult = await monitoredDbOperation('SELECT', client.query.bind(client),
+      checkQuery, 
+      [user_id, codeid],
+      { req }
+    );
+    
+    // 安全检查结果是否存在
+    if (!checkResult || !Array.isArray(checkResult.rows)) {
+      throw new Error('Invalid database response format');
+    }
+    
+    if (checkResult.rows.length > 0) {
+      logger.warn('Record already exists', { 
+        user_id, 
+        codeid,
+        request_id: req.requestId
+      });
+      await monitoredDbOperation('ROLLBACK_TRANSACTION', client.query.bind(client),
+        'ROLLBACK',
+        { req }
+      );
+      return res.status(400).json({
+        success: false,
+        error: 'Record with this user_id and codeid already exists'
+      });
+    }
+    
+    // 创建新记录
+    const insertQuery = `
+      INSERT INTO ing (user_id, codeid, json, html) 
+      VALUES ($1, $2, NULL, NULL) 
+      RETURNING id, json, html, codeid, user_id
+    `;
+    const insertResult = await monitoredDbOperation('INSERT', client.query.bind(client),
+      insertQuery, 
+      [user_id, codeid],
+      { req }
+    );
+    
+    // 安全检查结果是否存在
+    if (!insertResult || !Array.isArray(insertResult.rows) || insertResult.rows.length === 0) {
+      throw new Error('Failed to create record: no rows returned');
+    }
+    
+    // 提交事务
+    await monitoredDbOperation('COMMIT_TRANSACTION', client.query.bind(client),
+      'COMMIT',
+      { req }
+    );
+    
+    const createdRecord = insertResult.rows[0];
+    logger.info('New ing form record created successfully', { 
+      user_id, 
+      codeid, 
+      record_id: createdRecord.id,
+      request_id: req.requestId
+    });
+    
+    res.status(201).json({
+      success: true,
+      data: createdRecord
+    });
+  } catch (error) {
+    // 如果发生错误，回滚事务
+    if (client) {
+      try {
+        await monitoredDbOperation('ROLLBACK_TRANSACTION', client.query.bind(client),
+          'ROLLBACK',
+          { req }
+        );
+      } catch (rollbackError) {
+        logger.error('Failed to rollback transaction:', { 
+          error: rollbackError.message,
+          request_id: req.requestId
+        });
+      }
+    }
+    
+    logger.error('Error creating ing form record:', { 
+      error: error.message,
+      stack: error.stack,
+      user_id: req.validatedParams?.user_id,
+      codeid: req.validatedParams?.codeid,
+      request_id: req.requestId
+    });
+    
+    // 根据错误类型返回不同的状态码
+    if (error.message.includes('duplicate key') || error.message.includes('unique constraint')) {
+      res.status(409).json({
+        success: false,
+        error: 'Duplicate record: user_id and codeid combination must be unique'
+      });
+    } else if (error.message.includes('connection') || error.message.includes('timeout')) {
+      res.status(503).json({
+        success: false,
+        error: 'Service temporarily unavailable'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error'
+      });
+    }
+  } finally {
+    // 确保释放客户端连接
+    if (client) {
+      try {
+        client.release();
+        logger.debug('Database connection released', { 
+          request_id: req.requestId,
+          pool_status: { 
+            total: pool.totalCount || 'unknown', 
+            idle: pool.idleCount || 'unknown', 
+            waiting: pool.waitingCount || 'unknown' 
+          }
+        });
+      } catch (releaseError) {
+        logger.error('Failed to release database connection:', { 
+          error: releaseError.message,
+          request_id: req.requestId
+        });
+      }
+    }
+  }
+}
+
+// 健康检查端点
+  app.get('/health', (req, res) => res.json({ ok: true }));
+  
+  // 404处理中间件
+  app.use((req, res, next) => {
+    logger.warn('Route not found', { path: req.path, method: req.method });
+    res.status(404).json({
+      success: false,
+      error: 'Route not found'
+    });
+  });
+  
+  // 全局错误处理中间件
+  app.use((err, req, res, next) => {
+    try {
+      // 记录错误信息
+      logger.error('Unhandled error:', {
+        error: err.message,
+        stack: err.stack,
+        path: req.path,
+        method: req.method,
+        ip: req.ip
+      });
+      
+      // 检查是否是已知的错误类型
+      if (err.name === 'SyntaxError' && err instanceof SyntaxError) {
+        // JSON解析错误
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid JSON format in request body',
+          details: err.message
+        });
+      }
+      
+      if (err.type === 'entity.too.large') {
+        // 请求体过大
+        return res.status(413).json({
+          success: false,
+          error: 'Request body too large'
+        });
+      }
+      
+      // 数据库相关错误
+      if (err.code) {
+        switch (err.code) {
+          case 'ECONNREFUSED':
+          case 'ENOTFOUND':
+            return res.status(503).json({
+              success: false,
+              error: 'Database connection error'
+            });
+          case '23505':
+            return res.status(409).json({
+              success: false,
+              error: 'Conflict: Record already exists'
+            });
+          case '23503':
+            return res.status(400).json({
+              success: false,
+              error: 'Foreign key constraint violation'
+            });
+          default:
+            return res.status(500).json({
+              success: false,
+              error: 'Database error',
+              code: err.code
+            });
+        }
+      }
+      
+      // 默认错误响应
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+        // 在开发环境可以返回更多详情
+        ...(process.env.NODE_ENV === 'development' && { details: err.message })
+      });
+    } catch (errorHandlerError) {
+      // 处理错误处理器自身的错误
+      console.error('Error in error handler:', errorHandlerError);
+      res.status(500).json({
+        success: false,
+        error: 'Critical server error'
+      });
+    }
+  });
+
+// ===== 服务器启动 =====
+if (process.env.NODE_ENV !== 'test') {
+  initDatabase().finally(() => {
+    app.listen(port, () => {
+      logger.info(JSON.stringify({ msg: 'server_started', port }));
+    });
+  });
+}
+
+// 导出应用实例供测试使用
+module.exports = app;

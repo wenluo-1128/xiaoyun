@@ -1,0 +1,25 @@
+{
+  "success": true,
+  "data": [
+    {
+      "id": 56,
+      "json": null,
+      "html": null,
+      "codeid": "2f2cfa05200e7a35895f6cc368d39f0125d61b14152d1c96ec",
+      "user_id": 23
+    },
+    {
+      "id": 55,
+      "json": "{\"key\":\"value\"}",
+      "html": "123",
+      "codeid": "2d5f61e302c929f712235d34a2becbeaf3f544453c782f1a32",
+      "user_id": 23
+    }
+  ],
+  "pagination": {
+    "current_page": 1,
+    "page_size": 20,
+    "total_items": 2,
+    "total_pages": 1
+  }
+}

@@ -1,0 +1,249 @@
+/* 全局样式变量 */
+:root {
+  /* 主色调 - 紫蓝色渐变 */
+  --primary-color-start: #667eea;
+  --primary-color-end: #764ba2;
+  --primary-gradient: linear-gradient(90deg, var(--primary-color-start) 0%, var(--primary-color-end) 100%);
+  
+  /* 中性色 */
+  --text-primary: #333;
+  --text-secondary: #474747;
+  --text-light: #999;
+  --white: #fff;
+  --white-transparent: rgba(255, 255, 255, 0.1);
+  --white-transparent-2: rgba(255, 255, 255, 0.2);
+  --white-transparent-3: rgba(255, 255, 255, 0.3);
+  
+  /* 阴影 */
+  --shadow-light: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-medium: 0 8px 25px rgba(102, 126, 234, 0.2);
+  --shadow-heavy: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+  
+  /* 圆角 */
+  --radius-small: 8px;
+  --radius-medium: 12px;
+  --radius-large: 15px;
+  --radius-xl: 20px;
+  --radius-2xl: 30px;
+  
+  /* 过渡动画 */
+  --transition-fast: 0.3s ease;
+  --transition-medium: 0.5s ease;
+  --transition-slow: 0.8s ease;
+}
+
+/* 全局重置 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  background: var(--primary-gradient);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* 通用样式 */
+h1, h2, h3, h4, h5, h6 {
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+  transition: var(--transition-fast);
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+  border: none;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+  border: none;
+}
+
+/* 工具类 */
+.text-center {
+  text-align: center;
+}
+
+.text-primary {
+  color: var(--primary-color-start);
+}
+
+.text-gradient {
+  background: var(--primary-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.bg-glass {
+  background: var(--white-transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.shadow-glass {
+  box-shadow: var(--shadow-heavy);
+}
+
+.rounded {
+  border-radius: var(--radius-medium);
+}
+
+.rounded-lg {
+  border-radius: var(--radius-large);
+}
+
+.rounded-xl {
+  border-radius: var(--radius-xl);
+}
+
+.rounded-full {
+  border-radius: 50%;
+}
+
+.transition {
+  transition: var(--transition-fast);
+}
+
+/* 动画类 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.8s ease-out;
+}
+
+.slide-in-right {
+  animation: slideInRight 0.8s ease-out;
+}
+
+.slide-in-left {
+  animation: slideInLeft 0.8s ease-out;
+}
+
+.pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* 响应式断点 */
+@media (max-width: 1200px) {
+  html {
+    font-size: 15px;
+  }
+}
+
+@media (max-width: 768px) {
+  html {
+    font-size: 14px;
+  }
+  
+  body {
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-width: 480px) {
+  html {
+    font-size: 13px;
+  }
+  
+  body {
+    font-size: 0.9rem;
+  }
+}
+
+/* 打印样式 */
+@media print {
+  .navbar, .footer, .background-animation {
+    display: none !important;
+  }
+  
+  .main-content {
+    padding-top: 0;
+  }
+}

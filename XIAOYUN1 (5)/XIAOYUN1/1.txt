@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" c" />
+  <title>平遥古城2天1夜深度文化体验之旅</title>
+  <meta name="description" c" />
+  <style>
+    :root{
+      --grad-start:#667eea;
+      --grad-end:#764ba2;
+      --glass-bg:rgba(255,255,255,0.10);
+      --glass-bd:rgba(255,255,255,0.20);
+      --text:#f5f7ff;
+      --muted:#cbd3ff;
+      --accent:#ffd166;
+      --ok:#06d6a0;
+      --warn:#ff6b6b;
+      --shadow: 0 8px 32px 0 rgba(0,0,0,0.10);
+      --radius: 16px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      color:var(--text);
+      font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+      background: linear-gradient(135deg,var(--grad-start),var(--grad-end));
+      background-attachment: fixed;
+    }
+    a{color:inherit}
+    .container{
+      max-width:1200px;
+      margin:0 auto;
+      padding:24px;
+    }
+    .glass{
+      background:var(--glass-bg);
+      border:1px solid var(--glass-bd);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      position:relative;
+      overflow:hidden;
+    }
+    .glass::before{
+      content:"";
+      position:absolute;inset:0;
+      background:linear-gradient(180deg,rgba(255,255,255,0.12),rgba(255,255,255,0.02));
+      pointer-events:none;
+    }
+    header.nav{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:14px 20px;border-radius:14px;
+      background:rgba(255,255,255,0.12);
+      border:1px solid rgba(255,255,255,0.22);
+      box-shadow:0 6px 24px rgba(0,0,0,.12);
+      position:sticky;top:16px;z-index:50;
+    }
+    .brand{
+      display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:.5px
+    }
+    .brand .logo{
+      width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.2);
+      display:grid;place-items:center;border:1px solid rgba(255,255,255,.3)
+    }
+    .nav-actions{
+      display:flex;gap:10px;align-items:center
+    }
+    .btn{
+      appearance:none;border:1px solid rgba(255,255,255,.28);
+      background:rgba(255,255,255,.12);color:var(--text);
+      padding:10px 14px;border-radius:12px;cursor:pointer;
+      transition:.2s ease; font-weight:600
+    }
+    .btn:hover{background:rgba(255,255,255,.18)}
+    .btn.secondary{background:transparent}
+    .hero{
+      display:grid;grid-template-columns:1.2fr .8fr;gap:24px;margin-top:20px
+    }
+    .hero .title{
+      font-size:34px;line-height:1.25;margin:0 0 8px;font-weight:800
+    }
+    .subtitle{color:var(--muted);margin:0 0 18px}
+    .meta{
+      display:flex;flex-wrap:wrap;gap:12px;margin:10px 0 0
+    }
+    .chip{
+      display:inline-flex;align-items:center;gap:8px;
+      padding:8px 12px;border-radius:999px;
+      background:rgba(255,255,255,.12);
+      border:1px solid rgba(255,255,255,.22);
+      font-size:13px
+    }
+    .grid{
+      display:grid;gap:24px;margin-top:24px
+    }
+    .grid.cols-3{grid-template-columns:repeat(3,1fr)}
+    .card{padding:20px}
+    .card h3{margin:0 0 10px;font-size:18px}
+    .card p{margin:6px 0}
+    .section-title{
+      font-size:22px;margin:8px 0 14px;font-weight:800;letter-spacing:.3px
+    }
+    .day{
+      padding:18px;border-radius:14px;margin-bottom:18px
+    }
+    .day h3{margin:0 0 8px;font-size:20px}
+    .time{
+      font-weight:700;color:var(--accent)
+    }
+    .item{
+      display:flex;gap:14px;align-items:flex-start;padding:14px;border-radius:12px;
+      background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
+      margin-bottom:12px
+    }
+    .item .dot{
+      width:10px;height:10px;border-radius:50%;background:var(--accent);margin-top:7px;flex:0 0 10px
+    }
+    .item .content{flex:1}
+    .muted{color:var(--muted)}
+    .budget{
+      display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px
+    }
+    .budget .row{
+      display:flex;justify-content:space-between;align-items:center;
+      padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.18)
+    }
+    .total{
+      font-size:18px;font-weight:800;color:#fff;background:rgba(255,255,255,.14);
+      border:1px solid rgba(255,255,255,.28);padding:10px 14px;border-radius:12px;margin-top:8px
+    }
+    .list{
+      display:flex;flex-wrap:wrap;gap:10px;margin-top:8px
+    }
+    .list .chip{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22)}
+    .hl{
+      display:flex;flex-wrap:wrap;gap:10px;margin-top:8px
+    }
+    .hl .chip i{opacity:.9}
+    .footer{
+      text-align:center;margin:26px 0 10px;color:rgba(255,255,255,.8);font-size:13px
+    }
+    .kpi{
+      display:flex;gap:14px;flex-wrap:wrap;margin-top:8px
+    }
+    .kpi .chip i{color:var(--ok)}
+    .coords{
+      display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px
+    }
+    code.copy{
+      user-select:all;display:inline-block;padding:6px 10px;border-radius:10px;
+      background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.22);font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace
+    }
+    @media (max-width: 980px){
+      .hero{grid-template-columns:1fr}
+      .grid.cols-3{grid-template-columns:1fr}
+      .budget{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="nav glass">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">🏮</div>
+        <div>
+          <div style="font-size:16px;line-height:1.1">平遥古城2天1夜深度文化体验之旅</div>
+          <small class="muted">明清古建筑群 · 晋商票号文化 · 预算约450-480元</small>
+        </div>
+      </div>
+      <div class="nav-actions">
+        <button class="btn secondary" id="printBtn" title="打印/导出">🖨️ 打印</button>
+        <button class="btn" id="copyBtn" title="复制坐标">📋 复制坐标</button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="glass" style="padding:22px">
+        <h1 class="title">搜索结果 · 行程总览</h1>
+        <p class="subtitle">平遥古城拥有完整的明清建筑群，是中国保存最完整的古代县城，非常符合您对古建筑与历史的文化重点需求。</p>
+        <div class="kpi">
+          <span class="chip"><i>📍</i> 目的地：平遥古城</span>
+          <span class="chip"><i>🧭</i> 坐标：<span id="coordText">112.183509, 37.204136</span></span>
+          <span class="chip"><i>🎯</i> 体验主题：明清古建筑群 + 晋商票号文化</span>
+          <span class="chip"><i>💸</i> 预算控制：约450-480元（符合500元预算）</span>
+          <span class="chip"><i>⏱️</i> 节奏设计：每日核心体验2-3个，充分沉浸时间</span>
+        </div>
+        <div class="coords">
+          <code class="copy" id="coordCode">112.183509, 37.204136</code>
+          <small class="muted">提示：点击“复制坐标”可一键复制</small>
+        </div>
+      </div>
+
+      <div class="glass card">
+        <div class="section-title">💸 预算控制（总计：480元）</div>
+        <div class="budget">
+          <div class="row"><span>交通费用</span><b>130元</b></div>
+          <div class="row"><span>住宿费用</span><b>160元</b></div>
+          <div class="row"><span>门票费用</span><b>120元</b></div>
+          <div class="row"><span>餐饮费用</span><b>40元</b></div>
+        </div>
+        <div class="total">总计：480元（符合500元预算）</div>
+        <div class="muted" style="margin-top:6px">
+          太原-平遥往返高铁：100元；古城内步行+公交：30元；云泽居客栈：160元/晚；平遥古城通票：100元；单独体验项目：20元。
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="glass card">
+        <div class="section-title">🏛️ Day1：古建筑群深度体验</div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="content">
+            <div><span class="time">上午 (10:00-12:00)</span></div>
+            <h3>【核心体验】平遥古城墙 + 文庙</h3>
+            <p>体验时长：2小时 · 参与方式：城墙登临 + 文庙祭祀文化体验</p>
+            <p class="muted">文化解读：平遥城墙始建于明洪武年间，是中国现存最完整的县级城防体系；文庙保存完好的宋代建筑风格。</p>
+            <div class="list">
+              <span class="chip">🏯 平遥城墙</span>
+              <span class="chip">📜 文庙</span>
+              <span class="chip">⏱️ 2小时</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="content">
+            <h3>住宿推荐：云泽居客栈（平遥古城县衙店）</h3>
+            <p>地址：政府街37号 · 价格：约160元/晚</p>
+            <p class="muted">特色：古色古香的四合院，步行2分钟到县衙。</p>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="content">
+            <div><span class="time">下午 (14:00-17:00)</span></div>
+            <h3>【核心体验】平遥县署博物馆</h3>
+            <p>体验时长：3小时 · 参与方式：深度导览 + 古代官府文化体验</p>
+            <p class="muted">文化解读：明代县署完整格局，了解古代地方行政文化。</p>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="content">
+            <div><span class="time">晚上 (19:30-21:00)</span></div>
+            <h3>【配套体验】古城灯光秀</h3>
+            <p>地点：迎薰门广场 · 体验方式：自由观赏</p>
+            <p class="muted">文化价值：现代光影技术与古城建筑的艺术融合。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass card">
+        <div class="section-title">💰 Day2：晋商票号文化深度体验</div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="content">
+            <div><span class="time">上午 (9:00-12:00)</span></div>
+            <h3>【核心体验】中国票号博物馆 + 商会博物馆</h3>
+            <p>体验时长：3小时 · 参与方式：票号金库体验 + 晋商商业文化研学。</p>
+            <p class="muted">文化解读：了解晋商“汇通天下”的金融创新。</p>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="content">
+            <div><span class="time">下午 (14:00-17:00)</span></div>
+            <h3>【深度体验】古城街道自由漫步 + 传统美食体验</h3>
+            <p>体验方式：无导游干扰的自助式文化沉浸。</p>
+            <div class="list">
+              <span class="chip">🍜 刀削面 (15-20元)</span>
+              <span class="chip">🥩 平遥牛肉 (30-40元)</span>
+              <span class="chip">🥟 栲栳栳 (25-30元)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="dot"></div>
+          <div class="content">
+            <div><span class="time">傍晚 (17:30)</span></div>
+            <h3>返程</h3>
+            <p class="muted">建议预留机动时间，避免错过末班车。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass card">
+        <div class="section-title">🎯 特别设计亮点</div>
+        <ul class="hl">
+          <li class="chip"><i>🚶 避开网红拥挤点</i> 避开日升昌等网红票号，专注小众但文化价值更高的票号博物馆。</li>
+          <li class="chip"><i>⏰ 错峰安排</i> 上午体验核心景点，避开下午人潮。</li>
+          <li class="chip"><i>🌌 现代融合体验</i> 城墙夜景灯光秀：古典建筑与现代光影艺术结合。</li>
+          <li class="chip"><i>💡 票号博物馆数字化展示</i> 传统金融文化与现代科技融合。</li>
+          <li class="chip"><i>🕒 慢节奏深度保障</i> 每个核心体验预留充足时间，无强制购物；提供自由活动时段，真正做到“深度体验”。</li>
+        </ul>
+        <div class="section-title" style="margin-top:14px">文化礼仪提示</div>
+        <ul class="hl">
+          <li class="chip"><i>🤫 进入文庙需保持肃静，勿大声喧哗。</li>
+          <li class="chip"><i>🤝 参与票号体验时了解晋商诚信文化内涵。</li>
+        </ul>
+        <p class="muted" style="margin-top:10px">
+          这个行程设计充分考虑了您500元预算限制，同时确保古建筑文化的深度体验，避开过度商业化的网红景点，是夏季独自文化旅行的理想选择。
+        </p>
+      </div>
+    </section>
+
+    <div class="footer">
+      © 行程示例 · 预算总计：480元 · 坐标：112.183509, 37.204136
+    </div>
+  </div>
+
+  <script>
+    // 交互：打印与复制坐标
+    const coordText = "112.183509, 37.204136";
+    const copyBtn = document.getElementById("copyBtn");
+    const printBtn = document.getElementById("printBtn");
+
+    // 打印功能
+    printBtn.addEventListener("click", () => window.print());
+
+    // 复制坐标功能
+    async function copyCoord() {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(coordText);
+        } else {
+          // 降级方案：创建临时输入框
+          const input = document.createElement("input");
+          input.value = coordText;
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand("copy");
+          document.body.removeChild(input);
+        }
+        // 显示复制成功状态
+        copyBtn.textC";
+        setTimeout(() => copyBtn.textC", 1200);
+      } catch (err) {
+        console.warn("复制失败:", err);
+        // 手动选中文本提示用户
+        const range = document.createRange();
+        range.selectNodeContents(document.getElementById("coordText"));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        alert("复制失败，请手动复制坐标：" + coordText);
+      }
+    }
+
+    copyBtn.addEventListener("click", copyCoord);
+  </script>
+</body>
+</html>
+
