@@ -28,7 +28,7 @@
        │
        ▼
 ┌─────────────────────────┐
-│   Agent 1 - 旅行计划生成  │  (VITE_API_KEY_1)
+│   Agent 1 - 旅行计划生成  │  (VITE_API_KEY_3)
 │   高德地图API Web服务     │
 │   生成初始旅游方案        │
 └───────────┬─────────────┘
@@ -56,9 +56,9 @@
 
 | Agent | API Key | 主要功能 | 技术实现 |
 |-------|---------|----------|----------|
-| Agent 1 | VITE_API_KEY_3 | 旅行计划初步生成 | 高德地图Web服务接口 |
+| Agent 3 | VITE_API_KEY_3 | 旅行计划初步生成 | 高德地图Web服务接口 |
 | Agent 2 | VITE_API_KEY_2 | HTML旅行计划页面生成 | LLM内容生成 |
-| Agent 3 | VITE_API_KEY_1 | 景点间路线规划 | 高德地图JSAPI 2.0 + LLM |
+| Agent 1 | VITE_API_KEY_1 | 景点间路线规划 | 高德地图JSAPI 2.0 + LLM |
 
 ### 前端环境变量配置
 
