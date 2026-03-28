@@ -17,6 +17,7 @@ const travelPlansRoutes = require('./routes/travelPlans');
 const usersRoutes = require('./routes/users');
 const formsRoutes = require('./routes/forms');
 const ingFormsRoutes = require('./routes/ingForms');
+const userInfoRoutes = require('./routes/userInfo');
 const { getHtmlContent } = require('./controllers/formsController');
 
 const app = express();
@@ -41,6 +42,7 @@ app.use(rateLimitMiddleware);
 
 app.get('/query/html', getHtmlContent);
 
+//测试用接口，插入测试数据到html表
 app.get('/api/test/insert-data', async (req, res) => {
   try {
     const insertQuery = `
@@ -63,6 +65,7 @@ app.use('/api', travelPlansRoutes);
 app.use('/api', usersRoutes);
 app.use('/api', formsRoutes);
 app.use('/api', ingFormsRoutes);
+app.use('/api', userInfoRoutes);
 
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 

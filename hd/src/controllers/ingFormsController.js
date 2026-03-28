@@ -50,7 +50,7 @@ async function queryIngForms(req, res) {
         total_pages: totalPages
       }
     };
-    
+
     logger.info('Query completed successfully', { 
       user_id, 
       records_found: queryResult.rows.length,

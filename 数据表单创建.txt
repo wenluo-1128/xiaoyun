@@ -102,3 +102,17 @@ CREATE TABLE ing (
     user_id INT
 );
 
+-- 创建用户搜索信息表（人数字段适配语义，保留字符串类型）
+CREATE TABLE IF NOT EXISTS user_info (
+    id SERIAL PRIMARY KEY,
+    userid INT,  -- 用户ID，关联users表主键id
+    query_keyword VARCHAR(255) NOT NULL,  -- 搜索关键词
+    depart_time VARCHAR(60),  -- 出发时间（替代原time字段，无关键字冲突，字符串类型）
+    destination VARCHAR(40),  -- 搜索目的地
+    the_count VARCHAR(40),  -- 出行人数（支持带单位描述）
+    budget VARCHAR(40)  -- 预算金额
+);
+
+-- 为user_info表添加theme字段（字符串类型，长度60）
+ALTER TABLE IF EXISTS user_info
+ADD COLUMN IF NOT EXISTS theme VARCHAR(60);

@@ -47,7 +47,7 @@ function validateJsonData(req, res, next) {
 const attractionSchema = Joi.object({
   id: Joi.number().required(),
   name: Joi.string().required(),
-  time: Joi.string().required(),
+  time: Joi.string().allow(''),
   lnglat: Joi.array().items(Joi.number()).length(2).required(),
   desc: Joi.string().required()
 });
@@ -73,8 +73,17 @@ const planSchema = Joi.object({
 
 function validatePlan(req, res, next) {
   if (req.method === 'POST' || req.method === 'PUT') {
-    const { error } = planSchema.validate(req.body.plan_data);
-    if (error) return res.status(400).json({ error: 'invalid plan_data' });
+    const { error } = planSchema.validate(req.body.plan_data, { abortEarly: false });
+    if (error) {
+      const errorDetails = error.details.map(detail => ({
+        field: detail.path.join('.'),
+        message: detail.message
+      }));
+      return res.status(400).json({
+        error: '无效的旅行计划数据',
+        details: errorDetails
+      });
+    }
   }
   next();
 }
@@ -95,7 +104,7 @@ function validateTravelPlanRequest(req, res, next) {
       logger.warn('旅行计划请求参数验证失败:', validationResult.error.details);
       return res.status(400).json({
         success: false,
-        error: validationResult.error.details.map(detail => detail.message).join(', ')
+        error: '请求参数验证失败：' + validationResult.error.details.map(detail => detail.message).join(', ')
       });
     }
 
@@ -369,6 +378,141 @@ function validateHtmlContent(req, res, next) {
   }
 }
 
+function validateUserInfoParams(req, res, next) {
+  try {
+    const params = req.method === 'GET' ? req.query : req.body;
+    const { userid } = params;
+    const validatedParams = {};
+
+    if (userid === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: '缺少必填参数：userid'
+      });
+    }
+
+    const numericUserid = Number(userid);
+    if (isNaN(numericUserid) || numericUserid <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'userid必须是正整数'
+      });
+    }
+
+    validatedParams.userid = numericUserid;
+    req.validatedParams = validatedParams;
+    next();
+  } catch (error) {
+    logger.error('Error validating user_info params:', error);
+    return res.status(400).json({
+      success: false,
+      error: '无效的请求参数'
+    });
+  }
+}
+
+function validateUserInfoInsert(req, res, next) {
+  try {
+    const params = req.method === 'GET' ? req.query : req.body;
+    const { userid, query_keyword, depart_time, destination, the_count, budget, theme } = params;
+    const validatedParams = {};
+
+    if (userid === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: '缺少必填参数：userid'
+      });
+    }
+
+    const numericUserid = Number(userid);
+    if (isNaN(numericUserid) || numericUserid <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'userid必须是正整数'
+      });
+    }
+    validatedParams.userid = numericUserid;
+
+    if (query_keyword === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: '缺少必填参数：query_keyword'
+      });
+    }
+
+    if (typeof query_keyword !== 'string' || query_keyword.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        error: 'query_keyword必须是非空字符串'
+      });
+    }
+    validatedParams.query_keyword = query_keyword.trim();
+
+    if (depart_time !== undefined) {
+      if (depart_time !== null && depart_time !== '') {
+        if (typeof depart_time !== 'string') {
+          return res.status(400).json({
+            success: false,
+            error: 'depart_time必须是字符串'
+          });
+        }
+        validatedParams.depart_time = depart_time.trim();
+      }
+    }
+
+    if (destination !== undefined) {
+      if (typeof destination !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'destination必须是字符串'
+        });
+      }
+      validatedParams.destination = destination.trim();
+    }
+
+    if (the_count !== undefined) {
+      if (typeof the_count !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'the_count必须是字符串'
+        });
+      }
+      validatedParams.the_count = the_count.trim();
+    }
+
+    if (budget !== undefined) {
+      if (typeof budget !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: 'budget必须是字符串'
+        });
+      }
+      validatedParams.budget = budget.trim();
+    }
+
+    if (theme !== undefined) {
+      if (theme !== null && theme !== '') {
+        if (typeof theme !== 'string') {
+          return res.status(400).json({
+            success: false,
+            error: 'theme必须是字符串'
+          });
+        }
+        validatedParams.theme = theme.trim();
+      }
+    }
+
+    req.validatedParams = validatedParams;
+    next();
+  } catch (error) {
+    logger.error('Error validating user_info insert params:', error);
+    return res.status(400).json({
+      success: false,
+      error: '无效的请求参数'
+    });
+  }
+}
+
 module.exports = {
   requireKeyword,
   validateJsonData,
@@ -378,5 +522,7 @@ module.exports = {
   validateUserRegistration,
   validateIngFormParams,
   validateJsonDataFormat,
-  validateHtmlContent
+  validateHtmlContent,
+  validateUserInfoParams,
+  validateUserInfoInsert
 };

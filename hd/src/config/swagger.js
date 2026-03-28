@@ -511,6 +511,147 @@ const swaggerSpec = {
           '500': { description: '服务器内部错误' }
         }
       }
+    },
+    '/api/user-info/query': {
+      post: {
+        summary: '根据userid查询用户搜索信息',
+        description: '接收userid参数，返回该用户的所有搜索信息记录',
+        tags: ['User Info'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['userid'],
+                properties: {
+                  userid: {
+                    type: 'integer',
+                    description: '用户ID（必需，正整数）',
+                    example: 12345
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: '查询成功，返回匹配的记录',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    data: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'integer' },
+                          userid: { type: 'integer' },
+                          query_keyword: { type: 'string' },
+                          depart_time: { type: 'string' },
+                          destination: { type: 'string' },
+                          the_count: { type: 'string' },
+                          budget: { type: 'string' }
+                        }
+                      }
+                    },
+                    count: { type: 'integer' }
+                  }
+                }
+              }
+            }
+          },
+          '400': { description: '参数错误：userid无效或缺失' },
+          '500': { description: '服务器内部错误' },
+          '503': { description: '数据库连接错误' }
+        }
+      }
+    },
+    '/api/user-info/insert': {
+      post: {
+        summary: '插入用户搜索信息',
+        description: '向user_info表插入一条新的用户搜索信息记录',
+        tags: ['User Info'],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['userid', 'query_keyword'],
+                properties: {
+                  userid: {
+                    type: 'integer',
+                    description: '用户ID（必需，正整数）',
+                    example: 12345
+                  },
+                  query_keyword: {
+                    type: 'string',
+                    description: '搜索关键词（必需）',
+                    example: '北京三日游'
+                  },
+                  depart_time: {
+                    type: 'string',
+                    description: '出发时间（可选）',
+                    example: '2024-06-01'
+                  },
+                  destination: {
+                    type: 'string',
+                    description: '搜索目的地（可选）',
+                    example: '北京'
+                  },
+                  the_count: {
+                    type: 'string',
+                    description: '出行人数（可选）',
+                    example: '3人'
+                  },
+                  budget: {
+                    type: 'string',
+                    description: '预算金额（可选）',
+                    example: '3000元'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '201': {
+            description: '插入成功',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    message: { type: 'string' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'integer' },
+                        userid: { type: 'integer' },
+                        query_keyword: { type: 'string' },
+                        depart_time: { type: 'string' },
+                        destination: { type: 'string' },
+                        the_count: { type: 'string' },
+                        budget: { type: 'string' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { description: '参数错误：缺少必填参数或参数格式无效' },
+          '409': { description: '记录已存在' },
+          '500': { description: '服务器内部错误' },
+          '503': { description: '数据库连接错误' }
+        }
+      }
     }
   }
 };

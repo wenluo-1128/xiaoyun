@@ -71,6 +71,21 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_html_codeid ON html(codeid);
       CREATE INDEX IF NOT EXISTS idx_html_userid ON html(userid);
     `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_info (
+        id SERIAL PRIMARY KEY,
+        userid INT,
+        query_keyword VARCHAR(255) NOT NULL,
+        depart_time VARCHAR(60),
+        destination VARCHAR(40),
+        the_count VARCHAR(40),
+        budget VARCHAR(40)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_user_info_userid ON user_info(userid);
+      CREATE INDEX IF NOT EXISTS idx_user_info_query_keyword ON user_info(query_keyword);
+    `);
     
     logger.info('数据库初始化成功');
   } catch (error) {

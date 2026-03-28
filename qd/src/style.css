@@ -1,0 +1,946 @@
+/* 全局样式变量 */
+:root {
+  /* 主题色 - 海岛度假风 */
+  --color-primary: #2980B9; /* 主色-深海蓝（提高对比度） */
+  --color-secondary: #F5F5F5; /* 辅色-贝壳白 */
+  --color-accent: #E74C3C; /* 强调色-珊瑚红（提高对比度） */
+  
+  
+  /* 中性色 */
+  --color-bg: #FFFFFF; /* 页面背景 */
+  --color-card: #F9FBFC; /* 卡片背景 */
+  --color-text-main: #1A202C; /* 主要文字（提高对比度） */
+  --color-text-light: #4A5568; /* 次要文字（提高对比度） */
+  --color-border: #E2E8F0; /* 边框色 */
+  
+  /* 渐变色 - 仅限按钮局部使用 */
+  --gradient-primary: linear-gradient(90deg, var(--color-primary) 0%, #3498DB 100%);
+  
+  /* 功能色 */
+  --success-color: #2E7D32; /* 成功色（提高对比度） */
+  --success-color-bg: rgba(76, 175, 80, 0.2);
+  --danger-color: #e44949; /* 危险色（提高对比度） */
+  --danger-color-alt: #B71C1C;
+  --danger-color-bg: rgba(231, 76, 60, 0.1);
+  
+  /* 文本颜色 */
+  --text-primary: #1A202C; /* 主要文字（WCAG AA标准） */
+  --text-secondary: #2D3748; /* 次要文字（WCAG AA标准） */
+  --text-tertiary: #4A5568; /* 第三级文字（WCAG AA标准） */
+  --text-light: #718096; /* 轻文字（WCAG AA标准） */
+  --text-lighter: #A0AEC0; /* 更轻文字（仅用于非关键信息） */
+  --white: #fff;
+  
+  /* 背景颜色 */
+  --bg-gray-light: #FAFBFC;
+  --bg-gray-lighter: #FFFFFF;
+  --bg-overlay-dark: rgba(0, 0, 0, 0.5);
+  --bg-overlay-light: rgba(0, 0, 0, 0.05);
+  
+  /* 边框颜色 */
+  --border-color: #E2E8F0;
+  /* --border-color: #9fc1f5; */
+  
+  /* 透明度颜色 - 基于海岛蓝 */
+  --white-transparent-10: rgba(255, 255, 255, 0.1);
+  --white-transparent-18: rgba(255, 255, 255, 0.18);
+  --white-transparent-20: rgba(255, 255, 255, 0.2);
+  --white-transparent-30: rgba(255, 255, 255, 0.3);
+  --white-transparent-80: rgba(255, 255, 255, 0.8);
+  --white-transparent-95: rgba(255, 255, 255, 0.95);
+  
+  --primary-transparent-20: rgba(41, 128, 185, 0.2);
+  --primary-transparent-30: rgba(41, 128, 185, 0.3);
+  --primary-transparent-95: rgba(41, 128, 185, 0.95);
+  
+  --dark-transparent-37: rgba(31, 38, 135, 0.37);
+  --dark-transparent-10: rgba(0, 0, 0, 0.1);
+  
+  /* 阴影 */
+  --shadow-light: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-medium: 0 8px 25px rgba(41, 128, 185, 0.2);
+  --shadow-heavy: 0 8px 32px 0 rgba(74, 146, 247, 0.37);
+  --shadow-hover: 0 10px 20px rgba(41, 128, 185, 0.3);
+  --shadow-focus: 0 0 0 3px rgba(41, 128, 185, 0.2);
+  --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.1);
+  
+  /* 圆角 */
+  --radius-small: 8px;
+  --radius-medium: 12px;
+  --radius-large: 15px;
+  --radius-xl: 20px;
+  --radius-2xl: 30px;
+  
+  /* 过渡动画 */
+  --transition-fast: 0.3s ease;
+  --transition-medium: 0.5s ease;
+  --transition-slow: 0.8s ease;
+  
+  /* 可访问性 */
+  --focus-outline: 2px solid var(--color-primary);
+  --focus-outline-offset: 2px;
+}
+
+/* 全局重置 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  background: linear-gradient(135deg, #F8FAFD 0%, #E3F2FD 100%);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* 通用样式 */
+h1, h2, h3, h4, h5, h6 {
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+  transition: var(--transition-fast);
+  cursor: pointer;
+}
+
+a:hover {
+  color: var(--color-primary);
+}
+
+a:focus {
+  outline: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+  border: none;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+button:focus {
+  outline: none;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  outline: none;
+  border: none;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+}
+
+/* 可访问性样式 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 键盘导航样式 */
+:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px rgba(41, 128, 185, 0.2);
+  transition: all var(--transition-fast);
+}
+
+/* 为所有可交互元素添加:focus-visible支持 */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px rgba(41, 128, 185, 0.2);
+  transition: all var(--transition-fast);
+}
+
+/* 高对比度模式支持 */
+@media (prefers-contrast: high) {
+  :root {
+    --color-primary: #1A5276;
+    --color-accent: #C0392B;
+    --text-primary: #000000;
+    --text-secondary: #1A1A1A;
+    --border-color: #000000;
+  }
+}
+
+/* 深色模式支持 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #1A202C;
+    --color-card: #2D3748;
+    --text-primary: #F7FAFC;
+    --text-secondary: #E2E8F0;
+    --text-tertiary: #CBD5E0;
+    --text-light: #A0AEC0;
+    --border-color: #4A5568;
+    --bg-gray-light: #2D3748;
+    --bg-gray-lighter: #1A202C;
+  }
+}
+
+/* 工具类 */
+.text-center {
+  text-align: center;
+}
+
+.text-primary {
+  color: var(--color-primary);
+}
+
+.text-gradient {
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.bg-glass {
+  background: var(--white-transparent-95);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.shadow-glass {
+  box-shadow: var(--shadow-heavy);
+}
+
+.rounded {
+  border-radius: var(--radius-medium);
+}
+
+.rounded-lg {
+  border-radius: var(--radius-large);
+}
+
+.rounded-xl {
+  border-radius: var(--radius-xl);
+}
+
+.rounded-full {
+  border-radius: 50%;
+}
+
+.transition {
+  transition: var(--transition-fast);
+}
+
+/* 动画类 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes bounce {
+  0%, 20%, 50%, 80%, 100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-10px);
+  }
+  60% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes rotateIn {
+  from {
+    opacity: 0;
+    transform: rotate(-10deg) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(0) scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.8s ease-out;
+}
+
+.slide-in-right {
+  animation: slideInRight 0.8s ease-out;
+}
+
+.slide-in-left {
+  animation: slideInLeft 0.8s ease-out;
+}
+
+.pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.bounce {
+  animation: bounce 1s ease-in-out;
+}
+
+.scale-in {
+  animation: scaleIn 0.5s ease-out;
+}
+
+.rotate-in {
+  animation: rotateIn 0.6s ease-out;
+}
+
+.shimmer {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite linear;
+}
+
+/* 微交互工具类 */
+.hover-lift {
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-hover);
+}
+
+.hover-scale {
+  transition: transform 0.3s ease;
+}
+
+.hover-scale:hover {
+  transform: scale(1.05);
+}
+
+.hover-glow {
+  transition: box-shadow 0.3s ease;
+}
+
+.hover-glow:hover {
+  box-shadow: 0 0 20px rgba(41, 128, 185, 0.5);
+}
+
+.hover-color {
+  transition: color 0.3s ease, background-color 0.3s ease;
+}
+
+.hover-border {
+  transition: border-color 0.3s ease, transform 0.3s ease;
+}
+
+.hover-border:hover {
+  border-color: var(--color-primary);
+  transform: translateY(-2px);
+}
+
+/* 按钮微交互 */
+.btn-primary {
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.btn-primary::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.6s ease;
+  z-index: -1;
+}
+
+.btn-primary:hover::before {
+  left: 100%;
+}
+
+/* 卡片微交互 */
+.card-hover {
+  transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-hover);
+  border-color: var(--color-primary);
+}
+
+/* 导航链接微交互 */
+.nav-link {
+  position: relative;
+}
+
+.nav-link::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: var(--gradient-primary);
+  transition: width 0.3s ease;
+}
+
+.nav-link:hover::after {
+  width: 100%;
+}
+
+/* 输入框微交互 */
+.input-focus {
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+}
+
+.input-focus:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 3px rgba(41, 128, 185, 0.2);
+}
+
+/* 滚动动画 */
+.scroll-reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.scroll-reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* 响应式断点 */
+@media (max-width: 1200px) {
+  html {
+    font-size: 15px;
+  }
+  
+  .container {
+    max-width: 95%;
+  }
+}
+
+@media (max-width: 768px) {
+  html {
+    font-size: 14px;
+  }
+  
+  body {
+    font-size: 0.95rem;
+  }
+  
+  .container {
+    max-width: 95%;
+    padding: 0 1rem;
+  }
+  
+  /* 导航栏响应式 */
+  .navbar-container {
+    padding: 0.75rem 1rem;
+  }
+  
+  .nav-links {
+    display: none;
+  }
+  
+  .mobile-menu-btn {
+    display: block;
+  }
+  
+  /* 页脚响应式 */
+  .footer-container {
+    grid-template-columns: 1fr;
+    padding: 0 1rem;
+    gap: 2rem;
+  }
+  
+  .footer-section {
+    gap: 1rem;
+  }
+  
+  /* 英雄区域响应式 */
+  .hero-title {
+    font-size: 2.5rem;
+  }
+  
+  .hero-subtitle {
+    font-size: 1.2rem;
+  }
+  
+  .hero-cta {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  /* 特色服务响应式 */
+  .features-section,
+  .testimonial-section {
+    padding: 3rem 1rem;
+  }
+  
+  .section-title {
+    font-size: 2rem;
+  }
+  
+  .section-subtitle {
+    font-size: 1rem;
+  }
+  
+  .features-grid {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+  
+  .feature-card {
+    padding: 2rem;
+  }
+  
+  /* 聊天页面响应式 */
+  .ai-chat-page {
+    width: 100%;
+    height: calc(100vh - 40px);
+    border-radius: 0;
+  }
+  
+  .chat-header {
+    padding: 1rem;
+  }
+  
+  .chat-messages {
+    padding: 1rem;
+    gap: 1rem;
+  }
+  
+  .message-wrapper {
+    max-width: 90%;
+  }
+  
+  .chat-input-area {
+    padding: 1rem;
+  }
+  
+  .options-container {
+    flex-direction: column;
+  }
+  
+  .option-btn {
+    width: 100%;
+  }
+  
+  /* 欢迎消息响应式 */
+  .welcome-message {
+    padding: 2rem 1rem;
+  }
+  
+  .welcome-icon {
+    width: 60px;
+    height: 60px;
+    font-size: 1.5rem;
+  }
+  
+  .welcome-message h3 {
+    font-size: 1.25rem;
+  }
+  
+  .welcome-message p {
+    font-size: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  html {
+    font-size: 13px;
+  }
+  
+  body {
+    font-size: 0.9rem;
+  }
+  
+  /* 移动端优化 */
+  .hero-title {
+    font-size: 2rem;
+  }
+  
+  .hero-badge {
+    font-size: 0.8rem;
+    padding: 0.4rem 1.2rem;
+  }
+  
+  .navbar-container {
+    padding: 0.5rem 1rem;
+  }
+  
+  .footer-container {
+    gap: 1.5rem;
+  }
+  
+  .footer-section {
+    gap: 0.75rem;
+  }
+  
+  .feature-card {
+    padding: 1.5rem;
+  }
+  
+  .testimonial-card {
+    padding: 1.5rem;
+  }
+  
+  .testimonial-content p {
+    font-size: 0.9rem;
+  }
+  
+  /* 确保移动设备上没有水平滚动 */
+  * {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  
+  html, body {
+    overflow-x: hidden;
+  }
+  
+  /* 触摸目标优化 */
+  button, a, input, select, textarea {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* 字体大小优化 */
+  h1 {
+    font-size: 1.8rem;
+  }
+  
+  h2 {
+    font-size: 1.5rem;
+  }
+  
+  h3 {
+    font-size: 1.25rem;
+  }
+  
+  p {
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+}
+
+/* 横屏移动设备优化 */
+@media (max-height: 500px) and (orientation: landscape) {
+  .hero-section {
+    min-height: 120vh;
+  }
+  
+  .ai-chat-page {
+    height: calc(100vh - 20px);
+  }
+  
+  .chat-messages {
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+  
+  .chat-input-area {
+    padding: 0.75rem;
+  }
+}
+
+/* 打印样式 */
+@media print {
+  .navbar, .footer, .background-animation {
+    display: none !important;
+  }
+  
+  .main-content {
+    padding-top: 0;
+  }
+}
+
+/* 性能优化 */
+
+/* 硬件加速 */
+.accelerated {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* 减少重绘的动画属性 */
+.optimized-animation {
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+/* 优化滚动性能 */
+.smooth-scroll {
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+/* 减少布局抖动 */
+.stable-layout {
+  width: 100%;
+  height: auto;
+  position: relative;
+}
+
+/* 优化动画性能 */
+@keyframes optimizedFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.optimized-fade-in {
+  animation: optimizedFadeIn 0.8s ease-out;
+  transform: translate3d(0, 0, 0);
+  will-change: opacity, transform;
+}
+
+/* 减少不必要的动画 */
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .slide-in-right,
+  .slide-in-left,
+  .pulse,
+  .float,
+  .bounce,
+  .scale-in,
+  .rotate-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  
+  .hover-lift,
+  .hover-scale,
+  .hover-glow,
+  .hover-border {
+    transition: none;
+  }
+}
+
+/* 图片优化 */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* 懒加载图片 */
+.lazy-image {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.lazy-image.loaded {
+  opacity: 1;
+}
+
+/* 减少DOM操作 */
+.batch-update {
+  will-change: transform;
+}
+
+/* 优化字体加载 */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/inter/v12/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hjA.woff2) format('woff2');
+}
+
+/* 优化滚动条性能 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(200, 200, 200, 0.3);
+  border-radius: 3px;
+  transition: background 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 200, 200, 0.5);
+}
+
+/* 减少重绘的CSS技巧 */
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+.pointer-events-none {
+  pointer-events: none;
+}
+
+/* 优化z-index管理 */
+.z-index-dropdown {
+  z-index: 1000;
+}
+
+.z-index-modal {
+  z-index: 2000;
+}
+
+.z-index-tooltip {
+  z-index: 3000;
+}
+
+/* 减少CSS复杂度 */
+.simplified-box {
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-medium);
+  padding: 1rem;
+}
+
+/* 优化触摸事件 */
+.touch-optimized {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 减少布局偏移 */
+.reserve-space {
+  min-height: 200px;
+  position: relative;
+}
+
+/* 优化动画性能提示 */
+/* 
+  性能优化建议：
+  1. 使用 transform 和 opacity 进行动画，避免使用 top/left/width/height
+  2. 对于频繁动画的元素，使用 will-change: transform
+  3. 避免在动画期间修改 DOM
+  4. 使用 CSS 硬件加速（transform: translateZ(0)）
+  5. 减少动画持续时间，建议 150-300ms
+  6. 避免使用 box-shadow 和 border-radius 在动画元素上
+  7. 使用 requestAnimationFrame 进行 JavaScript 动画
+  8. 减少重排（reflow）和重绘（repaint）
+*/
