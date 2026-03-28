@@ -6,6 +6,21 @@
       @close="handleCloseLoginModal"
       @login-success="handleLoginSuccess"
     />
+    
+    <!-- 错误弹窗 -->
+    <div v-if="showErrorModal" class="modal-overlay">
+      <div class="modal-content error-modal">
+        <div class="modal-header">
+          <h3>提示</h3>
+        </div>
+        <div class="modal-body">
+          <p>当前访问人数过多，请稍后再试</p>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-btn" @click="showErrorModal = false">确定</button>
+        </div>
+      </div>
+    </div>
 
     <!-- 固定背景层（占满视口，不随内容滚动） -->
     <div class="hero-background">
@@ -91,7 +106,9 @@
                   v-for="(option, optIndex) in msg.options" 
                   :key="optIndex"
                   class="option-btn"
-                  @click="selectOption(option)"
+                  :class="{ disabled: msg.disabled }"
+                  :disabled="msg.disabled"
+                  @click="!msg.disabled && selectOption(option)"
                   :aria-label="`选择${option}`"
                 >
                   <Icon icon="carbon:chevron-right" class="option-icon" />
@@ -133,16 +150,16 @@
           class="message-input" 
           placeholder="输入消息..."
           rows="1"
-          @keydown.enter.ctrl="sendMessage"
-          :disabled="isGeneratingPlan"
+          @keydown="handleKeydown"
+          :disabled="isGeneratingPlan || isPlanSubmitted"
           aria-label="输入消息"
         ></textarea>
-        <button class="send-btn" @click="sendMessage" :disabled="!message.trim() || isGeneratingPlan" aria-label="发送消息">
+        <button class="send-btn" @click="sendMessage" :disabled="!message.trim() || isGeneratingPlan || isPlanSubmitted" aria-label="发送消息">
           <Icon icon="carbon:send" class="send-icon" />
         </button>
       </div>
       <div class="input-hint">
-        <span>按 Ctrl + Enter 发送消息</span>
+        <span>按 Enter 发送消息，按 Ctrl+Enter 或 Shift+Enter 换行</span>
       </div>
     </footer>
     </div>
@@ -169,10 +186,14 @@ const currentQuestionIndex = ref(0)
 const isGeneratingPlan = ref(false)
 // AI是否正在思考/回复
 const isAiThinking = ref(false)
+// 是否已提交方案（用于禁用输入框）
+const isPlanSubmitted = ref(false)
 // 登录状态管理
 const router = useRouter()
 const loginStore = useLoginStore()
 const showLoginModal = ref(false)
+// 错误弹窗状态
+const showErrorModal = ref(false)
 // 用户是否手动滚动
 const userScrolled = ref(false)
 // 滚动阈值（距离底部的像素数）
@@ -191,6 +212,15 @@ const loadMessagesFromLocalStorage = () => {
   
   if (savedMessages) {
     messages.value = JSON.parse(savedMessages)
+    
+    // 检查是否有用户点击"确定"的记录
+    const hasConfirmed = messages.value.some(msg => 
+      msg.type === 'user' && msg.content === ' 确定 '
+    )
+    
+    if (hasConfirmed) {
+      isPlanSubmitted.value = true
+    }
   }
   
   if (savedQuestionIndex) {
@@ -204,6 +234,8 @@ const startNewChat = () => {
   messages.value = []
   // 重置问题索引
   currentQuestionIndex.value = 0
+  // 重置方案提交状态
+  isPlanSubmitted.value = false
   // 清空localStorage
   localStorage.removeItem('chatMessages')
   localStorage.removeItem('currentQuestionIndex')
@@ -322,6 +354,7 @@ const sendNextQuestion = () => {
       content: question.content,
       options: question.options,
       isOptions: true,
+      disabled: false,
       time: getCurrentTime()
     })
     
@@ -337,6 +370,14 @@ const sendNextQuestion = () => {
 
 // 选择选项回答
 const selectOption = (option) => {
+  // 找到最后一个有选项的消息并禁用它
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].isOptions && !messages.value[i].disabled) {
+      messages.value[i].disabled = true
+      break
+    }
+  }
+  
   // 添加用户选择的选项
   messages.value.push({
     type: 'user',
@@ -351,7 +392,10 @@ const selectOption = (option) => {
   // console.log('发送的消息内容:', messages.value[messages.value.length - 1].content)
   
   // 特殊处理'确定'选项
-  if (option === '确定') {
+  if (option === ' 确定 ') {
+    // 设置方案已提交状态，禁用输入框
+    isPlanSubmitted.value = true
+    
     // 显示提示消息
     setTimeout(async () => {
       messages.value.push({
@@ -359,7 +403,7 @@ const selectOption = (option) => {
           content: '正在为你生成专属方案，请前往个人中心查看进度',
           time: getCurrentTime()
         })
-        
+        scrollToBottom()
         // 保存消息到localStorage
         saveMessagesToLocalStorage()
         
@@ -653,9 +697,39 @@ const selectOption = (option) => {
   scrollToBottom()
 }
 
+// 处理键盘事件
+const handleKeydown = (event) => {
+  // 按 Enter 发送消息
+  if (event.key === 'Enter' && !event.ctrlKey && !event.shiftKey) {
+    event.preventDefault()
+    sendMessage()
+  }
+  // 按 Ctrl+Enter 或 Shift+Enter 换行
+  else if (event.key === 'Enter' && (event.ctrlKey || event.shiftKey)) {
+    event.preventDefault()
+    const textarea = event.target
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    message.value = message.value.substring(0, start) + '\n' + message.value.substring(end)
+    // 重新设置光标位置到换行符之后并滚动到底部
+    setTimeout(() => {
+      textarea.selectionStart = textarea.selectionEnd = start + 1
+      textarea.scrollTop = textarea.scrollHeight
+    }, 0)
+  }
+}
+
 // 发送消息函数
 const sendMessage = () => {
   if (message.value.trim() && !isGeneratingPlan.value) {
+    // 找到最后一个有选项的消息并禁用它
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      if (messages.value[i].isOptions && !messages.value[i].disabled) {
+        messages.value[i].disabled = true
+        break
+      }
+    }
+    
     // 添加用户消息
     messages.value.push({
       type: 'user',
@@ -674,14 +748,14 @@ const sendMessage = () => {
         setTimeout(() => {
           isAiThinking.value = false
           sendNextQuestion()
-        }, 2000)
+        }, 500)
       } else {
-        // 所有问题回答完毕，开始生成方案
+        // 所有问题回答完毕，开始生成方案（包含用户的后续消息）
         isAiThinking.value = true
         setTimeout(() => {
           isAiThinking.value = false
           generateTravelPlan()
-        }, 2000)
+        }, 500)
       }
     
     scrollToBottom()
@@ -739,7 +813,19 @@ const travelPlanInfo = ref({
       collectedInfo.push('未指定')
     }
     
-    const info = `用户旅行偏好信息：
+    // 收集用户的所有后续消息（超出8个问题的部分）
+    const userFollowUpMessages = []
+    let followUpCount = 0
+    for (const msg of messages.value) {
+      if (msg.type === 'user' && followUpCount >= questions.length) {
+        userFollowUpMessages.push(msg.content)
+      }
+      if (msg.type === 'user') {
+        followUpCount++
+      }
+    }
+    
+    let info = `用户旅行偏好信息：
 1. 季节/时段：${collectedInfo[0]}
 2. 体验类型：${collectedInfo[1]}
 3. 文化重点：${collectedInfo[2]}
@@ -748,6 +834,11 @@ const travelPlanInfo = ref({
 6. 文化风格：${collectedInfo[5]}
 7. 预算范围：${collectedInfo[6]}
 8. 特殊偏好：${collectedInfo[7]}`
+    
+    // 如果有后续消息，添加到info中
+    if (userFollowUpMessages.length > 0) {
+      info += `\n\n用户后续问题/反馈：\n${userFollowUpMessages.map((msg, index) => `${index + 1}. ${msg}`).join('\n')}`
+    }
     
     // 存储收集到的信息到全局变量和localStorage，供ProfilePage使用
     travelPlanInfo.value = {
@@ -1026,8 +1117,9 @@ const travelPlanInfo = ref({
       messages.value.push({
         type: 'ai',
         content: '你对这个方案满意吗，满意的话请回复确定',
-        options: ['确定'],
+        options: [' 确定 '],
         isOptions: true,
+        disabled: false,
         time: getCurrentTime()
       })
       
@@ -1041,6 +1133,9 @@ const travelPlanInfo = ref({
     
   } catch (error) {
     console.error('API调用失败:', error)
+    
+    // 显示错误弹窗
+    showErrorModal.value = true
     
     // 错误处理：显示友好的错误消息
     messages.value.push({
@@ -1067,7 +1162,7 @@ const formatMarkdownForVue = (markdown) => {
   .replace(/#### ?(.*$)/gm, '<h4 class="markdown-h4">$1</h4><br>')
   .replace(/### ?(.*$)/gm, '<h4 class="markdown-h4">$1</h4><br>')
   .replace(/## ?(.*$)/gm, '<h3 class="markdown-h3">$1</h3><br>')
-  .replace(/(\d+\.) \*\*(.*?)\*\*：(.*)/gm, '<li><strong>$2</strong>：$3</li>')
+  .replace(/(\d+\.) \*\*(.*?)\*\*：(.*)/gm, '<br><li><strong>$2</strong>：$3</li>')
     
     
     
@@ -1673,6 +1768,30 @@ li {
   transform: translateX(5px);
 }
 
+.option-btn:disabled,
+.option-btn.disabled {
+  opacity: 0.5;
+  cursor: pointer;
+  background: var(--bg-gray-lighter);
+  color: var(--text-tertiary);
+  transform: none;
+  box-shadow: none;
+}
+
+.option-btn:disabled:hover,
+.option-btn.disabled:hover {
+  background: var(--bg-gray-lighter);
+  border-color: var(--border-color);
+  color: var(--text-tertiary);
+  transform: none;
+  box-shadow: none;
+}
+
+.option-btn:disabled .option-icon,
+.option-btn.disabled .option-icon {
+  transform: none;
+}
+
 /* 加载动画 */
 .loading-dots {
   display: flex;
@@ -2021,6 +2140,80 @@ li {
 
 .message-input:focus {
   transform: translateY(-1px);
+}
+
+/* 弹窗样式 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: var(--white);
+  border-radius: var(--radius-xl);
+  padding: 2rem;
+  box-shadow: var(--shadow-heavy);
+  max-width: 400px;
+  width: 90%;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.modal-header {
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.modal-body {
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.modal-body p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: center;
+}
+
+.modal-btn {
+  padding: 0.75rem 2rem;
+  border: none;
+  border-radius: var(--radius-large);
+  background: var(--gradient-primary);
+  color: var(--white);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.modal-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+}
+
+.error-modal .modal-header h3 {
+  color: var(--error-color);
 }
 
 .send-btn {

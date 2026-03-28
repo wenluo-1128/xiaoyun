@@ -6,6 +6,22 @@
       @close="handleCloseLoginModal"
       @login-success="handleLoginSuccess"
     />
+    
+    <!-- 退出登录确认弹窗 -->
+    <div v-if="showLogoutConfirm" class="modal-overlay">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>确认退出</h3>
+        </div>
+        <div class="modal-body">
+          <p>确定要退出登录吗？</p>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-btn modal-btn-secondary" @click="showLogoutConfirm = false">取消</button>
+          <button class="modal-btn" @click="confirmLogout">确定</button>
+        </div>
+      </div>
+    </div>
     <!-- 固定背景层（占满视口，不随内容滚动） -->
     <div class="hero-background">
       <div class="hero-pattern"></div>
@@ -187,9 +203,9 @@
               <span>账户安全</span>
               <Icon icon="carbon:chevron-right" class="arrow-icon" />
             </div>
-            <div class="setting-item">
-              <Icon icon="carbon:email" class="setting-icon" />
-              <span>通知设置</span>
+            <div class="setting-item" @click="handleLogout">
+              <Icon icon="carbon:logout" class="setting-icon" />
+              <span>退出登录</span>
               <Icon icon="carbon:chevron-right" class="arrow-icon" />
             </div>
             <div class="setting-item">
@@ -244,6 +260,8 @@ import { API_BASE_URL, API_ENDPOINTS } from '../config.js'
 const router = useRouter()
 const loginStore = useLoginStore()
 const showLoginModal = ref(false)
+// 退出登录确认弹窗
+const showLogoutConfirm = ref(false)
 
 // 状态管理
 const activeTab = ref('ongoing')
@@ -495,10 +513,14 @@ onMounted(async () => {
 })
 
 // 处理登录成功
-const handleLoginSuccess = () => {
+const handleLoginSuccess = async () => {
   showLoginModal.value = false
   // 登录成功后加载用户名
   loadUserName();
+  
+  // 登录成功后加载旅行计划信息并查询状态
+  await loadTravelPlans();
+  await queryPlanStatus();
 }
 
 // 关闭登录弹窗时的处理
@@ -530,6 +552,30 @@ const handleViewCustomization = (plan) => {
   console.log('准备跳转到:', redirectUrl);
   // 在新标签页打开URL
   window.open(redirectUrl, '_blank');
+}
+
+// 处理退出登录
+const handleLogout = () => {
+  // 显示确认弹窗
+  showLogoutConfirm.value = true
+}
+
+// 确认退出登录
+const confirmLogout = () => {
+  // 清除登录状态
+  loginStore.logout()
+  
+  // 清除本地存储中的用户数据
+  localStorage.removeItem('user')
+  localStorage.removeItem('chatMessages')
+  localStorage.removeItem('currentQuestionIndex')
+  localStorage.removeItem('travelPlans')
+  
+  // 关闭弹窗
+  showLogoutConfirm.value = false
+  
+  // 跳转到首页
+  router.push('/about')
 }
 
 onUnmounted(() => {
@@ -1200,5 +1246,86 @@ onUnmounted(() => {
     flex-wrap: wrap;
     justify-content: center;
   }
+}
+
+/* 弹窗样式 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: var(--white);
+  border-radius: var(--radius-xl);
+  padding: 2rem;
+  box-shadow: var(--shadow-heavy);
+  max-width: 400px;
+  width: 90%;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.modal-header {
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.modal-body {
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.modal-body p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.modal-btn {
+  padding: 0.75rem 2rem;
+  border: none;
+  border-radius: var(--radius-large);
+  background: var(--gradient-primary);
+  color: var(--white);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.modal-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+}
+
+.modal-btn-secondary {
+  background: var(--white-transparent-20);
+  color: var(--text-secondary);
+  border: 1px solid var(--white-transparent-30);
+}
+
+.modal-btn-secondary:hover {
+  background: var(--white-transparent-30);
 }
 </style>

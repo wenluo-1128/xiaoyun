@@ -1876,7 +1876,7 @@ function handleError(error, operation) {
   flex-direction: column;
   gap: 16px;
   z-index: 10;
-  height: 80%;
+  /* height: 80%; */
   margin-top: 40px;
 }
 
@@ -1888,7 +1888,7 @@ function handleError(error, operation) {
 }
 
 .panel {
-  flex:7;
+  /* flex:7; */
   overflow-y: hidden;
   position: relative;
 }
@@ -2040,7 +2040,7 @@ function handleError(error, operation) {
 /* 面板内容区域 */
 .panel-content {
   /* max-height: 350px; */
-  height: 350px;
+  height: 270px;
   overflow-y: auto;
   border: 1px solid var(--border-color);
 padding: 5px;
@@ -2253,8 +2253,8 @@ padding: 5px;
   padding: 10px;
   justify-content: space-around;
   position: absolute;
-  bottom: 0;
   width: 100%;
+  position: relative;
 }
 
 .actions1 button {
